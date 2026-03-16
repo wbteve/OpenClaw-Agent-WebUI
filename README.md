@@ -92,11 +92,6 @@ journalctl --user -u openclaw-webui-8899 -f
 
 精心打磨的移动端细节，不仅是响应式，更是沉浸式。
 
-<p align="center">
-  <img src="docs/screenshots/mobile_sidebar.jpg" width="45%" />
-  <img src="docs/screenshots/mobile_chat.jpg" width="45%" />
-</p>
-
 ---
 
 ## English
@@ -184,11 +179,6 @@ journalctl --user -u openclaw-webui-8899 -f
 ### 📱 Mobile Preview
 
 Meticulously crafted mobile details, providing not just responsiveness, but immersion.
-
-<p align="center">
-  <img src="docs/screenshots/mobile_sidebar.jpg" width="45%" />
-  <img src="docs/screenshots/mobile_chat.jpg" width="45%" />
-</p>
 
 ---
 
