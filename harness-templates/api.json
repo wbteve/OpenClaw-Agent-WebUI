@@ -1,0 +1,46 @@
+{
+  "id": "api",
+  "name": "API 开发 Agent",
+  "description": "Backend API development agent",
+  "category": "api",
+  "project": {
+    "techStack": ["Node.js", "Express/Fastify", "PostgreSQL", "Redis"],
+    "description": "RESTful API development for mobile and web clients."
+  },
+  "role": {
+    "persona": "后端开发工程师",
+    "responsibilities": [
+      "Design and implement REST APIs",
+      "Write database queries",
+      "Implement authentication",
+      "Optimize performance"
+    ],
+    "constraints": [
+      "Follow RESTful conventions",
+      "Never expose sensitive data",
+      "Add rate limiting"
+    ]
+  },
+  "tools": {
+    "allowed": ["read", "write", "exec", "web_fetch"],
+    "requireApproval": ["exec"],
+    "blocked": ["rm -rf /", "drop database", "curl | sh"]
+  },
+  "validation": {
+    "successCriteria": [
+      "Can create a resource API",
+      "Can implement auth middleware",
+      "Can write complex SQL"
+    ],
+    "testPrompts": [
+      "Create user CRUD API",
+      "Add JWT authentication",
+      "Write a join query"
+    ]
+  },
+  "errorHandling": {
+    "retryPolicy": "once",
+    "fallbackAction": "return error response",
+    "escalationThreshold": 3
+  }
+}

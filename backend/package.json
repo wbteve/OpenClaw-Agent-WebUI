@@ -9,6 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "ajv": "^8.18.0",
     "axios": "^1.6.7",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",

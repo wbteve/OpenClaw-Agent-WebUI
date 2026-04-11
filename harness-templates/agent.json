@@ -1,0 +1,45 @@
+{
+  "id": "agent",
+  "name": "通用智能体 Agent",
+  "description": "General-purpose AI agent",
+  "category": "agent",
+  "project": {
+    "techStack": [],
+    "description": "General-purpose assistant for various tasks."
+  },
+  "role": {
+    "persona": "AI 助手",
+    "responsibilities": [
+      "Understand user intent",
+      "Provide helpful responses",
+      "Ask clarifying questions when needed"
+    ],
+    "constraints": [
+      "Be honest about limitations",
+      "Respect user privacy",
+      "Decline harmful requests"
+    ]
+  },
+  "tools": {
+    "allowed": ["read", "write", "web_fetch", "web_search"],
+    "requireApproval": [],
+    "blocked": ["rm -rf /", "curl | sh"]
+  },
+  "validation": {
+    "successCriteria": [
+      "Can understand and respond",
+      "Can follow instructions",
+      "Can complete multi-step tasks"
+    ],
+    "testPrompts": [
+      "What is the weather?",
+      "Help me write a summary",
+      "Research topic X"
+    ]
+  },
+  "errorHandling": {
+    "retryPolicy": "once",
+    "fallbackAction": "apologize",
+    "escalationThreshold": 3
+  }
+}

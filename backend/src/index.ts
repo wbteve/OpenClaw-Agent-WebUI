@@ -13,6 +13,11 @@ import SessionManager from './session-manager';
 import ConfigManager from './config-manager';
 import DB from './db';
 import AgentProvisioner from './agent-provisioner';
+import HarnessContextEngine from './harness-context';
+import SchemaValidator from './schema-validator';
+import AgentValidator from './agent-validator';
+import EntropyGovernor from './entropy-governor';
+import AgentVersioning from './agent-versioning';
 import { exec } from 'child_process';
 import util from 'util';
 import net from 'net';
@@ -126,8 +131,13 @@ const upload = multer({
 // Initialize managers
 const db = new DB();
 const configManager = new ConfigManager();
+const agentValidator = new AgentValidator(configManager);
+const entropyGovernor = new EntropyGovernor();
+const agentVersioning = new AgentVersioning();
 const sessionManager = new SessionManager(db);
 const agentProvisioner = new AgentProvisioner();
+const harnessContextEngine = new HarnessContextEngine();
+const schemaValidator = new SchemaValidator();
 
 // Ensure main agent workspace is registered in openclaw.json at startup
 const mainRegistered = agentProvisioner.ensureMainAgent();
@@ -540,6 +550,263 @@ app.post('/api/config/restart', async (_req, res) => {
 app.get('/api/models', (_req, res) => {
   const models = agentProvisioner.readAvailableModels();
   res.json({ success: true, models });
+});
+
+// Harness Context Templates API
+app.get('/api/harness/templates', (_req, res) => {
+  const templates = harnessContextEngine.getTemplates();
+  // 隐藏内部实现细节，只返回元数据
+  const meta = templates.map(t => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    category: t.category,
+    techStack: t.project.techStack
+  }));
+  res.json({ success: true, templates: meta });
+});
+
+app.get('/api/harness/templates/:id', (req, res) => {
+  const template = harnessContextEngine.getTemplate(req.params.id);
+  if (!template) {
+    return res.status(404).json({ success: false, error: 'Template not found' });
+  }
+  res.json({ success: true, template });
+});
+
+app.post('/api/harness/generate', (req, res) => {
+  try {
+    const { agentId, name, model, templateId, customContext } = req.body;
+    if (!agentId || !name || !model) {
+      return res.status(400).json({ success: false, error: 'agentId, name, and model are required' });
+    }
+    
+    const context = harnessContextEngine.generateContext({
+      agentId,
+      name,
+      model,
+      templateId,
+      customContext
+    });
+    
+    res.json({ success: true, context });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Schema Validation API
+app.get('/api/schema/list', (_req, res) => {
+  const schemas = schemaValidator.listSchemas();
+  res.json({ success: true, schemas });
+});
+
+app.get('/api/schema/:name', (req, res) => {
+  const schema = schemaValidator.getSchemaDefinition(req.params.name);
+  if (!schema) {
+    return res.status(404).json({ success: false, error: 'Schema not found' });
+  }
+  res.json({ success: true, schema });
+});
+
+app.post('/api/schema/validate/:name', (req, res) => {
+  try {
+    const result = schemaValidator.validate(req.params.name, req.body);
+    if (result.valid) {
+      res.json({ success: true, valid: true });
+    } else {
+      res.json({ success: true, valid: false, errors: result.errors });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Agent Validation API
+app.post('/api/agents/validate', async (req, res) => {
+  try {
+    const { agentId, quick } = req.body;
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId is required' });
+    }
+    
+    const config = configManager.getConfig();
+    const validationConfig = {
+      agentId,
+      gatewayUrl: config.gatewayUrl,
+      token: config.token,
+      password: config.password
+    };
+    
+    const result = quick 
+      ? await agentValidator.quickValidate(validationConfig)
+      : await agentValidator.validateAgent(validationConfig);
+    
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Entropy Governor API
+app.get('/api/entropy/:agentId', (req, res) => {
+  const state = entropyGovernor.getState(req.params.agentId);
+  if (!state) {
+    return res.status(404).json({ success: false, error: 'Agent not found' });
+  }
+  res.json({ success: true, state });
+});
+
+app.get('/api/entropy/:agentId/report', (req, res) => {
+  const report = entropyGovernor.getUsageReport(req.params.agentId);
+  if (!report) {
+    return res.status(404).json({ success: false, error: 'Agent not found' });
+  }
+  res.json({ success: true, report });
+});
+
+app.get('/api/entropy', (_req, res) => {
+  const allStates = entropyGovernor.getAllStates();
+  res.json({ success: true, states: allStates });
+});
+
+app.put('/api/entropy/:agentId/config', (req, res) => {
+  try {
+    const { config } = req.body;
+    if (!config) {
+      return res.status(400).json({ success: false, error: 'config is required' });
+    }
+    entropyGovernor.updateConfig(req.params.agentId, config);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/entropy/:agentId/check', (req, res) => {
+  try {
+    const { operation, details } = req.body;
+    if (!operation) {
+      return res.status(400).json({ success: false, error: 'operation is required' });
+    }
+    const result = entropyGovernor.checkOperation(req.params.agentId, operation, details);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/entropy/:agentId/reset', (req, res) => {
+  try {
+    entropyGovernor.resetDailyStats(req.params.agentId);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/entropy/:agentId/audit', (req, res) => {
+  try {
+    const { action, sessionId, details, risk } = req.body;
+    if (!action) {
+      return res.status(400).json({ success: false, error: 'action is required' });
+    }
+    entropyGovernor.addAuditEntry(req.params.agentId, {
+      action,
+      sessionId,
+      details,
+      risk: risk || 'low'
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Agent Versioning API
+app.get('/api/versions/:agentId', (req, res) => {
+  const versions = agentVersioning.getHistory(req.params.agentId);
+  res.json({ success: true, versions });
+});
+
+app.get('/api/versions/:agentId/v/:version', (req, res) => {
+  const version = agentVersioning.getVersion(req.params.agentId, parseInt(req.params.version));
+  if (!version) {
+    return res.status(404).json({ success: false, error: 'Version not found' });
+  }
+  res.json({ success: true, version });
+});
+
+app.post('/api/versions/:agentId/record', (req, res) => {
+  try {
+    const { changes, author, label } = req.body;
+    if (!changes || !Array.isArray(changes)) {
+      return res.status(400).json({ success: false, error: 'changes array is required' });
+    }
+    const version = agentVersioning.recordChange(
+      req.params.agentId,
+      changes,
+      author || 'user',
+      label
+    );
+    res.json({ success: true, version });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/versions/:agentId/rollback/:version', (req, res) => {
+  try {
+    const result = agentVersioning.rollback(req.params.agentId, parseInt(req.params.version));
+    if (!result.success) {
+      return res.status(404).json({ success: false, error: result.message });
+    }
+    res.json({
+      success: true,
+      targetVersion: result.targetVersion,
+      message: result.message
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/versions/:agentId/compare', (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) {
+      return res.status(400).json({ success: false, error: 'from and to query params are required' });
+    }
+    const comparison = agentVersioning.compareVersions(
+      req.params.agentId,
+      parseInt(from as string),
+      parseInt(to as string)
+    );
+    res.json({ success: true, ...comparison });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/versions/:agentId/stats', (req, res) => {
+  const stats = agentVersioning.getStats(req.params.agentId);
+  if (!stats) {
+    return res.json({ success: true, stats: null });
+  }
+  res.json({ success: true, stats });
+});
+
+app.delete('/api/versions/:agentId', (req, res) => {
+  const deleted = agentVersioning.deleteHistory(req.params.agentId);
+  res.json({ success: deleted });
+});
+
+app.get('/api/versions/:agentId/export', (req, res) => {
+  const json = agentVersioning.exportHistory(req.params.agentId);
+  if (!json) {
+    return res.status(404).json({ success: false, error: 'Agent not found' });
+  }
+  res.json({ success: true, data: JSON.parse(json) });
 });
 
 app.post('/api/models/test', async (req, res) => {
