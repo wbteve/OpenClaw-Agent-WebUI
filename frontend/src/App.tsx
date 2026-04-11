@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatView from './components/ChatView';
+import GroupChatView from './components/GroupChatView';
 import SettingsView from './components/SettingsView';
 import LoginScreen from './components/LoginScreen';
 
-export type ViewType = 'chat' | 'settings';
+export type ViewType = 'chat' | 'groupchat' | 'settings';
 export type SettingsTab = 'gateway' | 'general' | 'models' | 'commands';
 
 export default function App() {
@@ -17,12 +18,15 @@ export default function App() {
       const tab = hash.split('/')[1] as SettingsTab;
       return { view: 'settings' as ViewType, tab };
     }
+    if (hash === 'groupchat') return { view: 'groupchat' as ViewType, tab: 'gateway' as SettingsTab };
     return { view: 'chat' as ViewType, tab: 'gateway' as SettingsTab };
   };
 
   const initialState = getHashState();
 
-  const [currentView, setCurrentView] = useState<ViewType>(initialState.view);
+  const [currentView, setCurrentView] = useState<ViewType>(
+    initialState.view === 'groupchat' ? 'groupchat' : initialState.view
+  );
   const [isConnected, setIsConnected] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialState.tab);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null); // null = checking
@@ -197,6 +201,12 @@ export default function App() {
             activeSessionId={activeSessionId} 
             onMenuClick={() => navigateTo(currentView, settingsTab, true)}
             sessions={sessions}
+            onSessionChange={setActiveSessionId}
+          />
+        ) : currentView === 'groupchat' ? (
+          <GroupChatView
+            isConnected={isConnected}
+            onMenuClick={() => navigateTo(currentView, settingsTab, true)}
           />
         ) : (
           <SettingsView 

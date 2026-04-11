@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Settings, ArrowLeft, X, Network, Terminal, Edit2, Trash2, Info, Cpu } from 'lucide-react';
+import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash } from 'lucide-react';
 import { Reorder } from 'motion/react';
 import { ViewType, SettingsTab } from '../App';
 
@@ -35,6 +35,20 @@ function SessionSkeleton() {
 }
 
 function SidebarHeader() {
+  const [aiName, setAiName] = useState('OpenClaw');
+  
+  useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.aiName) {
+          setAiName(data.aiName);
+          document.title = data.pageTitle || 'OPC管理系统';
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="flex items-center gap-2.5 p-4 border-b border-slate-100">
       <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center">
@@ -42,7 +56,7 @@ function SidebarHeader() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
         </svg>
       </div>
-      <span className="text-slate-800 font-semibold text-sm">OpenClaw</span>
+      <span className="text-slate-800 font-semibold text-sm">{aiName}</span>
     </div>
   );
 }
@@ -102,9 +116,22 @@ export default function Sidebar({
       .catch(console.error);
   }, [isModalOpen]);
 
-  // Info Modal State
-  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
-  const [viewingSession, setViewingSession] = useState<any>(null);
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    session: { id: string; name: string } | null;
+  }>({ visible: false, x: 0, y: 0, session: null });
+
+  // Rename Modal State
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  // Model Selector Modal State
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+  const [modelSessionId, setModelSessionId] = useState<string | null>(null);
 
   // Template contents for new agents
   const templates = {
@@ -236,64 +263,86 @@ export default function Sidebar({
     }
   };
 
-  const handleStartEdit = async (e: React.MouseEvent | null, session: {id: string, name: string}) => {
-    if (e) e.stopPropagation();
+  // Context Menu Handlers
+  const handleContextMenu = (e: React.MouseEvent, session: {id: string, name: string}) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      session,
+    });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu({ visible: false, x: 0, y: 0, session: null });
+  };
+
+  const handleRename = (session: {id: string, name: string}) => {
+    closeContextMenu();
+    setRenameSessionId(session.id);
+    setRenameValue(session.name || '');
+    setIsRenameModalOpen(true);
+  };
+
+  const handleChangeModel = (session: {id: string, name: string}) => {
+    closeContextMenu();
+    setModelSessionId(session.id);
+    setIsModelModalOpen(true);
+  };
+
+  const handleDeleteFromContext = (e: React.MouseEvent, session: {id: string, name: string}) => {
+    e.stopPropagation();
+    closeContextMenu();
+    confirmDeleteSession(e, session.id);
+  };
+
+  const submitRename = async () => {
+    if (!renameSessionId || !renameValue.trim()) return;
     
     try {
-      const res = await fetch('/api/sessions');
+      const res = await fetch(`/api/sessions/${renameSessionId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: renameValue.trim(),
+        }),
+      });
+      
       if (res.ok) {
-        const data = await res.json();
-        const fullSession = data.find((s: any) => s.id === session.id);
-        
-        let configs = { soulContent: '', userContent: '', agentsContent: '', toolsContent: '', heartbeatContent: '', identityContent: '', model: '' };
-        if (fullSession) {
-          const configRes = await fetch(`/api/sessions/${session.id}/configs`);
-          if (configRes.ok) {
-            const configData = await configRes.json();
-            if (configData.success) {
-              configs = configData.configs;
-            }
-          }
-          
-          setNewSessionData({ 
-            id: fullSession.agentId || '',
-            name: fullSession.name || '', 
-            model: configs.model || '',
-            soulContent: configs.soulContent || '',
-            userContent: configs.userContent || '',
-            agentsContent: configs.agentsContent || '',
-            toolsContent: configs.toolsContent || '',
-            heartbeatContent: configs.heartbeatContent || '',
-            identityContent: configs.identityContent || '',
-          });
-          setEditingSessionId(session.id);
-          setModalMode('edit');
-          setIsModalOpen(true);
-          setIsInfoModalOpen(false);
-        }
+        setIsRenameModalOpen(false);
+        await reloadSessions();
       }
-    } catch (e) {
-      console.error('Failed to fetch session details for editing', e);
+    } catch (err) {
+      console.error('Failed to rename session:', err);
     }
   };
 
-  const handleShowInfo = async (e: React.MouseEvent, session: {id: string, name: string}) => {
-    e.stopPropagation();
-    setIsInfoModalOpen(true);
-
-    setViewingSession(session);
-
+  const submitModelChange = async (modelId: string) => {
+    if (!modelSessionId) return;
+    
     try {
-      const res = await fetch('/api/sessions');
+      // First get the session configs
+      const configRes = await fetch(`/api/sessions/${modelSessionId}/configs`);
+      const configData = await configRes.json();
+      
+      const res = await fetch(`/api/sessions/${modelSessionId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: sessions.find(s => s.id === modelSessionId)?.name,
+          model: modelId,
+          soulContent: configData.configs?.soulContent || '',
+        }),
+      });
+      
       if (res.ok) {
-        const data = await res.json();
-        const fullSession = data.find((s: any) => s.id === session.id);
-        if (fullSession) {
-          setViewingSession(fullSession);
-        }
+        setIsModelModalOpen(false);
+        await reloadSessions();
       }
-    } catch (e) {
-      console.error('Failed to fetch session details for info', e);
+    } catch (err) {
+      console.error('Failed to change model:', err);
     }
   };
 
@@ -301,6 +350,7 @@ export default function Sidebar({
   const renderSessionCard = (s: {id: string, name: string}) => (
     <div
       onClick={() => { setActiveSessionId(s.id); navigateTo('chat', settingsTab, false); }}
+      onContextMenu={(e) => handleContextMenu(e, s)}
       className={`w-full group text-left py-2.5 px-3 text-sm rounded-xl transition-all duration-200 flex items-center justify-between cursor-pointer border ${activeSessionId === s.id ? 'bg-brand-50 border-brand-200 text-slate-800' : 'text-slate-700 hover:bg-slate-100 border-transparent'}`}
     >
       <div className="flex-1 min-w-0">
@@ -315,11 +365,11 @@ export default function Sidebar({
       </div>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
         <button
-          onClick={(e) => handleShowInfo(e, s)}
+          onClick={(e) => handleContextMenu(e, s)}
           className="p-1.5 text-slate-400 hover:text-brand-500 hover:bg-brand-50 rounded-lg transition-all"
-          title="详情"
+          title="更多操作"
         >
-          <Info className="w-4 h-4" />
+          <MoreHorizontal className="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -399,6 +449,21 @@ export default function Sidebar({
         <SidebarHeader />
 
       <div className="px-3 pb-3">
+        {/* 群聊入口按钮 */}
+        <button
+          onClick={() => navigateTo('groupchat', settingsTab, false)}
+          className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border transition-all duration-200 font-medium text-sm active:scale-[0.98] mb-2 ${
+            currentView === 'groupchat'
+              ? 'bg-orange-50 border-orange-200 text-orange-600'
+              : 'border-orange-200 text-orange-600 hover:bg-orange-50 hover:border-orange-300'
+          }`}
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+          </svg>
+          群聊
+        </button>
+        {/* 新建Agent按钮 */}
         <button
           onClick={() => {
             setModalMode('create');
@@ -652,70 +717,7 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Session Info Modal */}
-      {isInfoModalOpen && viewingSession && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsInfoModalOpen(false)}></div>
-          <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-md overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50">
-              <div className="flex items-center gap-3">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-900 leading-tight">智能体详情</h3>
-                </div>
-              </div>
-              <button 
-                onClick={() => setIsInfoModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-6">
-              <div className="space-y-4">
-
-                <div className="group">
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">智能体ID</label>
-                  <p className="text-sm font-mono text-gray-900 bg-gray-50 p-3 rounded-xl border border-gray-100">{viewingSession.agentId || viewingSession.id}</p>
-                </div>
-
-                <div className="group">
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">智能体名称</label>
-                  <p className="text-sm text-gray-900 bg-gray-50 p-3 rounded-xl border border-gray-100">{viewingSession.name}</p>
-                </div>
-
-                <div className="group">
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">独立模型配置</label>
-                  <div className="flex items-center gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100 min-h-[46px]">
-                    <span className="text-sm font-mono text-gray-900">
-                      {viewingSession.model || '未设置 (默认)'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button 
-                  onClick={() => handleStartEdit(null, viewingSession)}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-white border border-blue-200 text-blue-600 hover:bg-blue-50 hover:border-blue-300 rounded-xl font-bold transition-all"
-                >
-                  <Edit2 className="w-4 h-4" />
-                  修改
-                </button>
-        <button 
-                  onClick={(e) => { setIsInfoModalOpen(false); confirmDeleteSession(e, viewingSession.id); }}
-                  disabled={viewingSession.id === 'main' || viewingSession.agentId === 'main'}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 hover:border-red-200 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  删除
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Session Info Modal removed - use context menu instead */}
       {/* Delete Confirmation Modal - outside aside to center properly */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center p-4">
@@ -749,6 +751,231 @@ export default function Sidebar({
           </div>
         </div>
       )}
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <>
+          <div 
+            className="fixed inset-0 z-[300]" 
+            onClick={closeContextMenu}
+          />
+          <div 
+            className="fixed z-[301] bg-white rounded-xl border border-gray-200 shadow-xl py-1 min-w-[180px] animate-in fade-in zoom-in-95 duration-150"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              onClick={() => contextMenu.session && handleRename(contextMenu.session)}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+            >
+              <Edit3 className="w-4 h-4" />
+              <span>重命名</span>
+            </button>
+            <button
+              onClick={() => contextMenu.session && handleChangeModel(contextMenu.session)}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+            >
+              <Cpu className="w-4 h-4" />
+              <span>指定API模型</span>
+            </button>
+            <div className="h-px bg-gray-100 my-1" />
+            <button
+              onClick={(e) => contextMenu.session && handleDeleteFromContext(e, contextMenu.session)}
+              disabled={contextMenu.session?.id === 'main' || contextMenu.session?.id === 'main'}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Trash className="w-4 h-4" />
+              <span>删除</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Rename Modal */}
+      {isRenameModalOpen && (
+        <div className="fixed inset-0 z-[350] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsRenameModalOpen(false)}></div>
+          <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-sm overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+                  <Edit3 className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900">重命名智能体</h3>
+                  <p className="text-xs text-gray-500">修改显示名称</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsRenameModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                智能体名称
+              </label>
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submitRename()}
+                placeholder="输入新名称..."
+                className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-sm"
+                autoFocus
+              />
+            </div>
+            <div className="p-4 bg-gray-50 flex gap-3 border-t border-gray-100">
+              <button 
+                type="button" 
+                onClick={() => setIsRenameModalOpen(false)}
+                className="flex-1 px-4 py-2.5 text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-xl font-semibold transition-all"
+              >
+                取消
+              </button>
+              <button 
+                type="button" 
+                onClick={submitRename}
+                disabled={!renameValue.trim()}
+                className="flex-1 px-4 py-2.5 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-semibold transition-all"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Model Selector Modal */}
+      {isModelModalOpen && (
+        <ModelSelectModal
+          modelSessionId={modelSessionId}
+          sessions={sessions}
+          availableModels={availableModels}
+          onClose={() => setIsModelModalOpen(false)}
+          onSelect={submitModelChange}
+        />
+      )}
     </>
+  );
+}
+
+// Model Select Modal Component
+function ModelSelectModal({ modelSessionId, sessions, availableModels, onClose, onSelect }: {
+  modelSessionId: string | null;
+  sessions: {id: string, name: string}[];
+  availableModels: any[];
+  onClose: () => void;
+  onSelect: (modelId: string) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const session = sessions.find(s => s.id === modelSessionId);
+  const currentModel = (session as any)?.model;
+
+  return (
+    <div className="fixed inset-0 z-[350] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+      <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-md overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+              <Cpu className="w-5 h-5 text-purple-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-900">指定API模型</h3>
+              <p className="text-xs text-gray-500">为当前智能体选择独立模型</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-4 max-h-[400px] overflow-y-auto">
+          {/* Search */}
+          <div className="relative mb-4">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索模型..."
+              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none transition-all text-sm pl-10"
+            />
+            <svg className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          
+          {/* Current model info */}
+          <div className="mb-4 p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <span className="text-xs text-gray-500">当前模型：</span>
+            <span className="text-sm font-mono text-gray-700 ml-2">{currentModel || '使用默认模型'}</span>
+          </div>
+          
+          {/* Model list */}
+          <div className="space-y-2">
+            {/* Clear option */}
+            <button
+              onClick={() => onSelect('')}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${
+                !currentModel
+                  ? 'bg-blue-50 border-blue-200 text-blue-600'
+                  : 'bg-white border-gray-100 text-gray-700 hover:border-gray-200'
+              }`}
+            >
+              <span className="text-sm font-medium">使用默认模型</span>
+              {!currentModel && (
+                <span className="text-xs bg-blue-100 px-2 py-0.5 rounded-full">当前</span>
+              )}
+            </button>
+            
+            {availableModels
+              .filter(m => {
+                if (!search) return true;
+                const q = search.toLowerCase();
+                return m.id.toLowerCase().includes(q) || (m.alias && m.alias.toLowerCase().includes(q));
+              })
+              .sort((a, b) => {
+                if (a.primary && !b.primary) return -1;
+                if (!a.primary && b.primary) return 1;
+                return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' });
+              })
+              .map(m => {
+                const isSelected = currentModel === m.id;
+                
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => onSelect(m.id)}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${
+                      isSelected
+                        ? 'bg-blue-50 border-blue-200 text-blue-600'
+                        : 'bg-white border-gray-100 text-gray-700 hover:border-gray-200'
+                    }`}
+                  >
+                    <div className="flex-1 text-left min-w-0">
+                      <div className="text-sm font-medium truncate">{m.alias || m.id}</div>
+                      <div className="text-xs text-gray-400 font-mono truncate">{m.id}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {m.primary && (
+                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 rounded text-blue-600 font-medium">默认</span>
+                      )}
+                      {isSelected && (
+                        <span className="text-xs bg-blue-100 px-2 py-0.5 rounded-full">当前</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })
+            }
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -30,6 +30,7 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
 
   // --- General settings state ---
   const [aiName, setAiName] = useState('我的小龙虾');
+  const [pageTitle, setPageTitle] = useState('OPC管理系统');
   const [loginEnabled, setLoginEnabled] = useState(false);
   const [loginPassword, setLoginPassword] = useState('123456');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -134,6 +135,10 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
         if (data.loginPassword) setLoginPassword(data.loginPassword);
         if (data.allowedHosts) setAllowedHosts(data.allowedHosts);
         if (data.openclawWorkspace) setOpenclawWorkspace(data.openclawWorkspace);
+        if (data.pageTitle) {
+          setPageTitle(data.pageTitle);
+          document.title = data.pageTitle;
+        }
       })
       .catch(console.error);
 
@@ -473,7 +478,7 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aiName, loginEnabled, loginPassword }),
+        body: JSON.stringify({ aiName, loginEnabled, loginPassword, pageTitle }),
       });
       if (res.ok) {
         setGeneralSaved(true);
@@ -1095,6 +1100,21 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
                     ) : (
                       <p className="text-xs text-gray-400 mt-1.5">AI 在对话中显示的名称，限制10个汉字（20个英文字符）</p>
                     )}
+                  </div>
+
+                  {/* Page Title */}
+                  <div className="border-t border-gray-100 pt-6">
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      网页标题
+                    </label>
+                    <input
+                      type="text"
+                      value={pageTitle}
+                      onChange={(e) => setPageTitle(e.target.value)}
+                      placeholder="OPC管理系统"
+                      className="block w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all text-sm"
+                    />
+                    <p className="text-xs text-gray-400 mt-1.5">浏览器标签页显示的标题，默认为"OPC管理系统"</p>
                   </div>
 
                   {/* Login Password Toggle */}

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, Children, isValidElement, cloneElement, ReactNode } from 'react';
-import { Menu, Plus, Quote, Copy, Check, Download, X, Search, ChevronUp, ChevronDown, Trash2 } from 'lucide-react';
+import { Menu, Plus, Quote, Copy, Check, Download, X, Search, ChevronUp, ChevronDown, Trash2, ChevronDown as ChevronDownIcon } from 'lucide-react';
 import { getFileIconInfo } from '../utils/fileUtils';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,10 +22,11 @@ interface ChatViewProps {
   isConnected: boolean;
   activeSessionId: string;
   onMenuClick: () => void;
-  sessions: {id: string, name: string, characterId?: string, model?: string}[];
+  sessions: {id: string, name: string, characterId?: string, model?: string, agentId?: string, key?: string | null}[];
+  onSessionChange: (sessionId: string) => void;
 }
 
-export default function ChatView({ isConnected, activeSessionId, onMenuClick, sessions }: ChatViewProps) {
+export default function ChatView({ isConnected, activeSessionId, onMenuClick, sessions, onSessionChange }: ChatViewProps) {
   // --- States ---
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -54,6 +55,18 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
 
   const activeSessionName = sessions.find(s => s.id === activeSessionId)?.name || (aiName || '未命名角色');
+  
+  // Session dropdown state
+  const [showSessionDropdown, setShowSessionDropdown] = useState(false);
+  
+  // Get sessions belonging to the same agent as activeSession
+  const currentSession = sessions.find(s => s.id === activeSessionId);
+  const sameAgentSessions = sessions.filter(s => {
+    // Match by agentId or by name if agentId not available
+    if (currentSession?.agentId && s.agentId === currentSession.agentId) return true;
+    if (currentSession?.name && s.name === currentSession.name && s.id !== activeSessionId) return true;
+    return false;
+  });
 
 
   
@@ -855,6 +868,76 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
                   {!isConnected ? '未连接' : (isLoading ? '正在输入...' : '已连接')}
                 </span>
               </div>
+              
+              {/* Session Selector Dropdown */}
+              {sameAgentSessions.length > 0 && (
+                <div className="relative flex items-center gap-2">
+                  {/* Full session key display */}
+                  {currentSession?.key && (
+                    <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded max-w-[200px] truncate hidden lg:inline-block" title={currentSession.key}>
+                      {decodeURIComponent(currentSession.key)}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setShowSessionDropdown(!showSessionDropdown)}
+                    className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg border border-blue-200 transition-colors"
+                    title="切换会话"
+                  >
+                    <span className="hidden sm:inline">会话</span>
+                    <span className="sm:hidden">切</span>
+                    <span className="bg-blue-200 text-blue-700 px-1 rounded text-[10px] font-bold">{sameAgentSessions.length + 1}</span>
+                    <ChevronDownIcon className="w-3 h-3" />
+                  </button>
+                  
+                  {showSessionDropdown && (
+                    <>
+                      <div 
+                        className="fixed inset-0 z-40" 
+                        onClick={() => setShowSessionDropdown(false)}
+                      />
+                      <div className="absolute top-full left-0 mt-1 bg-white rounded-xl border border-gray-200 shadow-xl py-1 min-w-[200px] max-w-[320px] z-50">
+                        <div className="px-3 py-2 text-xs font-semibold text-gray-500 border-b border-gray-100">
+                          同一 Agent 的会话
+                        </div>
+                        
+                        {/* Current session */}
+                        <button
+                          onClick={() => setShowSessionDropdown(false)}
+                          className="w-full flex flex-col items-start px-3 py-2 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors"
+                        >
+                          <div className="flex items-center justify-between w-full">
+                            <span className="truncate font-medium">当前: {activeSessionName}</span>
+                            <span className="text-[10px] bg-blue-200 px-1.5 py-0.5 rounded text-blue-700 ml-2">当前</span>
+                          </div>
+                          {currentSession?.key && (
+                            <span className="text-[10px] font-mono text-gray-500 mt-1 truncate w-full">{decodeURIComponent(currentSession.key)}</span>
+                          )}
+                        </button>
+                        
+                        {/* Other sessions of same agent */}
+                        {sameAgentSessions.map(session => (
+                          <button
+                            key={session.id}
+                            onClick={() => {
+                              setShowSessionDropdown(false);
+                              onSessionChange(session.id);
+                            }}
+                            className="w-full flex flex-col items-start px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="truncate">{session.name || session.id}</span>
+                              <span className="text-xs text-gray-400 ml-2">{session.model ? session.model.split('/').pop() : ''}</span>
+                            </div>
+                            {session.key && (
+                              <span className="text-[10px] font-mono text-gray-400 mt-0.5 truncate w-full">{decodeURIComponent(session.key)}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

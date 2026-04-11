@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage/
+*.coverage
+*.coverage.*
+.nyc_output/
+
+# Debug
+.npm
+.node_repl_history
+*.tgz
+
+# Temporary files
+.tmp/
+.temp/
+*.tmp
+.cache/
+.parcel-cache/
+
+# OpenClaw specific
+.clawui/
+uploads/
+*.db
+*.db-journal
+
+# Backup files
+*.bak
+*.backup
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+.playwright/
+test-results/
+playwright-report/

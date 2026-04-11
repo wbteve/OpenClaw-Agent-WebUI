@@ -7,6 +7,7 @@ import os from 'os';
 import { createServer } from 'http';
 import multer from 'multer';
 import { WebSocket } from 'ws';
+import Database from 'better-sqlite3';
 import OpenClawClient from './openclaw-client';
 import SessionManager from './session-manager';
 import ConfigManager from './config-manager';
@@ -28,6 +29,65 @@ app.use(express.json());
 const dataDir = process.env.CLAWUI_DATA_DIR || '.clawui';
 const uploadDir = path.join(process.env.HOME || '.', dataDir, 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
+
+// SQLite for group chat persistence (initialized after dataDir)
+const dbPath = path.join(process.env.HOME || '.', dataDir, 'group-chat.db');
+const groupChatDB = new Database(dbPath);
+
+// Create table if not exists
+groupChatDB.exec(`
+  CREATE TABLE IF NOT EXISTS group_messages (
+    id TEXT PRIMARY KEY,
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    mentions TEXT DEFAULT '[]',
+    is_task INTEGER DEFAULT 0,
+    task_status TEXT,
+    task_assignee TEXT
+  )
+`);
+
+// Helper functions for SQLite
+function insertGroupMessage(msg: any) {
+  const stmt = groupChatDB.prepare(`
+    INSERT INTO group_messages (id, sender_id, sender_name, content, timestamp, mentions, is_task, task_status, task_assignee)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    msg.id,
+    msg.senderId,
+    msg.senderName,
+    msg.content,
+    typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+    JSON.stringify(msg.mentions || []),
+    msg.isTask ? 1 : 0,
+    msg.taskStatus || null,
+    msg.taskAssignee || null
+  );
+}
+
+function getAllGroupMessages(): any[] {
+  const stmt = groupChatDB.prepare('SELECT * FROM group_messages ORDER BY timestamp ASC');
+  const rows = stmt.all() as any[];
+  return rows.map(row => ({
+    id: row.id,
+    senderId: row.sender_id,
+    senderName: row.sender_name,
+    content: row.content,
+    timestamp: row.timestamp,
+    mentions: JSON.parse(row.mentions || '[]'),
+    isTask: row.is_task === 1,
+    taskStatus: row.task_status,
+    taskAssignee: row.task_assignee,
+  }));
+}
+
+function updateGroupMessageTaskStatus(id: string, status: string) {
+  const stmt = groupChatDB.prepare('UPDATE group_messages SET task_status = ? WHERE id = ?');
+  stmt.run(status, id);
+}
 
 // OpenClaw media directory (screenshots, inbound files, etc.)
 const openclawMediaDir = path.join(process.env.HOME || '.', '.openclaw', 'media');
@@ -222,6 +282,7 @@ app.get('/api/config', (_req, res) => {
     hasToken: !!config.token,
     hasPassword: !!config.password,
     aiName: config.aiName || 'OpenClaw',
+    pageTitle: config.pageTitle || 'OPC管理系统',
     loginEnabled: config.loginEnabled || false,
     loginPassword: config.loginPassword || '123456',
     allowedHosts: config.allowedHosts || [],
@@ -858,15 +919,75 @@ app.put('/api/characters/:agentId/user-md', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/sessions', (_req, res) => {
-  const sessions = sessionManager.getAllSessions();
-  const sessionsWithModel = sessions.map(session => {
+// Get all sessions - from both local DB and OpenClaw gateway
+app.get('/api/sessions', async (_req, res) => {
+  // Get local sessions from sessionManager
+  const localSessions = sessionManager.getAllSessions();
+  const localSessionsWithModel = localSessions.map(session => {
     return {
       ...session,
       model: agentProvisioner.readAgentModel(session.agentId) || ''
     };
   });
-  res.json(sessionsWithModel);
+
+  // Also try to get sessions from OpenClaw gateway
+  try {
+    const config = configManager.getConfig();
+    console.log('[Sessions] gatewayUrl:', config.gatewayUrl, 'token:', config.token ? 'yes' : 'no');
+    if (config.gatewayUrl) {
+      const client = new OpenClawClient({
+        gatewayUrl: config.gatewayUrl,
+        token: config.token,
+        password: config.password,
+      });
+      await client.connect();
+      const gatewaySessions = await client.listSessions();
+      console.log('[Sessions] Gateway sessions:', JSON.stringify(gatewaySessions).substring(0, 500));
+      client.disconnect();
+
+      const gwData = gatewaySessions as any;
+      const gwSessionsList = gwData.sessions || [];
+
+      if (gwSessionsList.length > 0) {
+        // Merge gateway sessions with local sessions
+        const localIds = new Set(localSessions.map(s => s.id));
+        const mergedSessions = [...localSessionsWithModel];
+        const defaultModel = gwData.defaults?.model || '';
+
+        for (const gs of gwSessionsList) {
+          const gsId = gs.sessionId || gs.key || gs.id;
+          // Skip if we already have this session locally
+          if (localIds.has(gsId)) continue;
+
+          // Extract agentId from key like "agent:ros2-devops:chat:ros2-devops"
+          let agentId = gs.agentId || '';
+          if (!agentId && gs.key) {
+            const parts = gs.key.split(':');
+            if (parts.length >= 2) agentId = parts[1];
+          }
+
+          // Add gateway session that isn't local yet
+          mergedSessions.push({
+            id: gsId,
+            name: gs.name || agentId || gsId,
+            agentId: agentId,
+            model: gs.model || defaultModel,
+            position: 999,
+            updated_at: gs.updatedAt || Date.now(),
+            created_at: gs.createdAt || Date.now(),
+            key: gs.key || null,  // Full session key like agent:ros2-devops:chat:ros2-devops
+          } as any);
+        }
+
+        return res.json(mergedSessions);
+      }
+    }
+  } catch (err) {
+    console.error('[Sessions] Failed to fetch gateway sessions:', err);
+  }
+
+  // Fallback to local only
+  res.json(localSessionsWithModel);
 });
 
 app.post('/api/sessions', async (req, res) => {
@@ -986,8 +1107,64 @@ app.post('/api/sessions/reorder', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/history/:sessionId', (req, res) => {
-  const rows = db.getMessages(req.params.sessionId, 200).reverse();
+app.get('/api/history/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  
+  // First try local DB
+  const rows = db.getMessages(sessionId, 200).reverse();
+  
+  // If local DB has messages, return them
+  if (rows.length > 0) {
+    return res.json({ success: true, messages: rows });
+  }
+  
+  // Otherwise check if this is a gateway session (UUID format)
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(sessionId)) {
+    try {
+      const config = configManager.getConfig();
+      if (config.gatewayUrl) {
+        const client = new OpenClawClient({
+          gatewayUrl: config.gatewayUrl,
+          token: config.token,
+          password: config.password,
+        });
+        await client.connect();
+        
+        // Try to find the session key from gateway sessions
+        const gatewaySessions = await client.listSessions();
+        const gwData = gatewaySessions as any;
+        const gwSessionsList = gwData.sessions || [];
+        
+        // Find matching session
+        const gwSession = gwSessionsList.find((s: any) => 
+          s.sessionId === sessionId || s.id === sessionId
+        );
+        
+        let sessionKey = gwSession?.key || `agent:main:chat:${sessionId}`;
+        
+        const messages = await client.getChatHistory(sessionKey, 100);
+        client.disconnect();
+        
+        if (messages && messages.length > 0) {
+          // Transform gateway messages to our format
+          const transformedMessages = messages.map((m: any, idx: number) => ({
+            id: `gw-${Date.now()}-${idx}`,
+            session_key: sessionKey,
+            role: m.role || 'user',
+            content: Array.isArray(m.content) ? m.content.map((c: any) => c.text || '').join('') : m.content || '',
+            created_at: m.createdAt || Date.now(),
+          }));
+          
+          return res.json({ success: true, messages: transformedMessages });
+        }
+      }
+    } catch (err) {
+      console.error('[History] Failed to fetch gateway history:', err);
+    }
+  }
+  
+  // Fallback to local (empty)
   res.json({ success: true, messages: rows });
 });
 
@@ -1155,6 +1332,184 @@ app.post('/api/chat/silent', async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ==========================================
+// Group Chat APIs (SQLite-backed)
+// ==========================================
+
+// Get all group chat messages
+app.get('/api/group-chat/messages', (_req, res) => {
+  try {
+    const messages = getAllGroupMessages();
+    res.json({ success: true, messages });
+  } catch (err) {
+    console.error('[GroupChat] Failed to get messages:', err);
+    res.status(500).json({ error: 'Failed to get messages' });
+  }
+});
+
+// Send a group chat message (broadcasts to mentioned agents and gets their response)
+app.post('/api/group-chat', async (req, res) => {
+  const { message, mentions, isTask, senderName = 'User' } = req.body;
+
+  if (!message) {
+    return res.status(400).json({ error: 'Missing message' });
+  }
+
+  // Clean up the message content (remove markdown bold from @mentions for storage)
+  const cleanContent = message.replace(/\*\*@([^\*]+)\*\*/g, '@$1');
+
+  const groupMsg = {
+    id: Date.now().toString(),
+    senderId: 'user',
+    senderName: senderName,
+    content: cleanContent,
+    timestamp: Date.now(),
+    mentions: mentions || [],
+    isTask: isTask || false,
+    taskStatus: isTask ? 'pending' as const : undefined,
+  };
+
+  // Store the message to SQLite
+  try {
+    insertGroupMessage(groupMsg);
+  } catch (err) {
+    console.error('[GroupChat] Failed to store message:', err);
+  }
+
+  // If there are @mentions, forward the message to each mentioned agent and get response
+  if (mentions && mentions.length > 0) {
+    const sessions = sessionManager.getAllSessions();
+    
+    for (const agentId of mentions) {
+      // Find the session for this agent
+      const session = sessions.find(s => 
+        s.agentId === agentId || 
+        s.name?.toLowerCase().includes(agentId.toLowerCase())
+      );
+      
+      if (session) {
+        try {
+          console.log(`[GroupChat] Forwarding to agent: ${agentId} (session: ${session.id})`);
+          
+          // Create a dedicated connection for this agent
+          const config = configManager.getConfig();
+          const client = new OpenClawClient({
+            gatewayUrl: config.gatewayUrl,
+            token: config.token,
+            password: config.password,
+          });
+          
+          await client.connect();
+          
+          // Send task assignment to the agent - format the message nicely
+          const taskContent = cleanContent;
+          const agentName = session.name || agentId;
+          
+          const taskMessage = `[Group Chat] You were mentioned by ${senderName} in the group chat:\n\n${taskContent}\n\nPlease respond to this task appropriately and keep your response concise.`;
+          
+          // Send message and wait for response
+          const response = await client.sendChatMessage({ 
+            sessionKey: session.id, 
+            message: taskMessage 
+          });
+          
+          client.disconnect();
+          
+          console.log(`[GroupChat] Agent ${agentId} responded: ${response.substring(0, 100)}...`);
+          
+          // Add agent's response to the group chat
+          if (response && response.trim()) {
+            const agentResponseMsg = {
+              id: `agent-${Date.now()}-${agentId}`,
+              senderId: agentId,
+              senderName: agentName,
+              content: response.trim(),
+              timestamp: Date.now(),
+              mentions: [],
+              isTask: false,
+            };
+            try {
+              insertGroupMessage(agentResponseMsg);
+            } catch (err) {
+              console.error('[GroupChat] Failed to store agent response:', err);
+            }
+          }
+          
+        } catch (err) {
+          console.error(`[GroupChat] Failed to forward to agent ${agentId}:`, err);
+          
+          // Add error message to group chat
+          const errorMsg = {
+            id: `error-${Date.now()}-${agentId}`,
+            senderId: 'system',
+            senderName: '系统',
+            content: `⚠️ 无法联系 Agent "${agentId}"，请检查是否在线`,
+            timestamp: Date.now(),
+            mentions: [],
+            isTask: false,
+          };
+          try {
+            insertGroupMessage(errorMsg);
+          } catch (err) {
+            console.error('[GroupChat] Failed to store error message:', err);
+          }
+        }
+      } else {
+        console.warn(`[GroupChat] No session found for agent: ${agentId}`);
+        
+        // Add "agent not found" message
+        const notFoundMsg = {
+          id: `notfound-${Date.now()}-${agentId}`,
+          senderId: 'system',
+          senderName: '系统',
+          content: `⚠️ 未找到 Agent "${agentId}"，请确认该Agent已创建并在线`,
+          timestamp: Date.now(),
+          mentions: [],
+          isTask: false,
+        };
+        try {
+          insertGroupMessage(notFoundMsg);
+        } catch (err) {
+          console.error('[GroupChat] Failed to store notfound message:', err);
+        }
+      }
+    }
+  }
+
+  res.json({ success: true, message: groupMsg });
+});
+
+// Update task status
+app.put('/api/group-chat/task/:messageId', (req, res) => {
+  const { messageId } = req.params;
+  const { status } = req.body;
+
+  if (!['pending', 'processing', 'done'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'Invalid status' });
+  }
+
+  try {
+    updateGroupMessageTaskStatus(messageId, status);
+    const messages = getAllGroupMessages();
+    const msg = messages.find(m => m.id === messageId);
+    res.json({ success: true, message: msg });
+  } catch (err) {
+    console.error('[GroupChat] Failed to update task status:', err);
+    res.status(500).json({ error: 'Failed to update task status' });
+  }
+});
+
+// Get all agents (for @mention picker)
+app.get('/api/group-chat/agents', (_req, res) => {
+  const sessions = sessionManager.getAllSessions();
+  const agents = sessions.map(s => ({
+    id: s.agentId || s.id,
+    name: s.name || s.agentId || s.id,
+    online: connections.has(s.id), // Check if agent has active connection
+  }));
+  res.json({ success: true, agents });
 });
 
 // file upload (doc/image/video/audio), supports multiple files

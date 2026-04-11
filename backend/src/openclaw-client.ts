@@ -236,6 +236,40 @@ export class OpenClawClient extends EventEmitter {
     return this.connected;
   }
 
+  async listSessions(): Promise<any[]> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      const sessions = await this.request('sessions.list', {}, 10000);
+      return sessions || [];
+    } catch (err) {
+      console.error('[OpenClawClient] listSessions failed:', err);
+      return [];
+    }
+  }
+
+  async getChatHistory(sessionKey: string, limit = 100): Promise<any[]> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      const history = await this.request('chat.history', {
+        sessionKey,
+        limit,
+      }, 30000);
+      
+      // history is an object with 'messages' array
+      if (history && Array.isArray(history.messages)) {
+        return history.messages;
+      }
+      return [];
+    } catch (err) {
+      console.error('[OpenClawClient] getChatHistory failed:', err);
+      return [];
+    }
+  }
+
   disconnect(): void {
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);

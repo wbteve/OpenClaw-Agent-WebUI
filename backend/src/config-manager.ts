@@ -7,6 +7,7 @@ interface Config {
   defaultAgent?: string;
   language?: 'zh-CN' | 'en';
   aiName?: string;
+  pageTitle?: string;
   loginEnabled?: boolean;
   loginPassword?: string;
   allowedHosts?: string[];
@@ -18,6 +19,7 @@ const DEFAULT_CONFIG: Config = {
   defaultAgent: 'main',
   language: 'zh-CN',
   aiName: '我的小龙虾',
+  pageTitle: 'OPC管理系统',
   loginEnabled: false,
   loginPassword: '123456',
   allowedHosts: [],
