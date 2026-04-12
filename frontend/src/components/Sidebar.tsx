@@ -546,7 +546,7 @@ export default function Sidebar({
       {isModalOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsModalOpen(false)}></div>
-          <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-md overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-[80%] overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50">
               <h3 className="text-xl font-bold text-gray-900">{modalMode === 'create' ? '新建智能体' : '智能体修改'}</h3>
               <button 
