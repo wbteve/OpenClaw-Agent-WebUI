@@ -22,11 +22,12 @@ interface ChatViewProps {
   isConnected: boolean;
   activeSessionId: string;
   onMenuClick: () => void;
-  sessions: {id: string, name: string, characterId?: string, model?: string, agentId?: string, key?: string | null}[];
+  sessions: {id: string, name: string, characterId?: string, model?: string, agentId?: string, key?: string | null, isSystemAgent?: boolean}[];
+  systemAgents?: {id: string, name: string, characterId?: string, model?: string, agentId?: string, key?: string | null, isSystemAgent?: boolean}[];
   onSessionChange: (sessionId: string) => void;
 }
 
-export default function ChatView({ isConnected, activeSessionId, onMenuClick, sessions, onSessionChange }: ChatViewProps) {
+export default function ChatView({ isConnected, activeSessionId, onMenuClick, sessions, systemAgents = [], onSessionChange }: ChatViewProps) {
   // --- States ---
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -54,17 +55,30 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
   const [searchMatches, setSearchMatches] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
 
-  const activeSessionName = sessions.find(s => s.id === activeSessionId)?.name || (aiName || '未命名角色');
+  // Find active session name - look in both sessions and systemAgents
+  const activeSessionName = sessions.find(s => s.id === activeSessionId)?.name || systemAgents.find(s => s.id === activeSessionId)?.name || (aiName || '未命名角色');
   
   // Session dropdown state
   const [showSessionDropdown, setShowSessionDropdown] = useState(false);
   
   // Get sessions belonging to the same agent as activeSession
-  const currentSession = sessions.find(s => s.id === activeSessionId);
+  // Look in both user sessions and system agents
+  const currentSession = sessions.find(s => s.id === activeSessionId) || systemAgents.find(s => s.id === activeSessionId);
+  
+  // For system agents: find user sessions where agentId matches the system agent's id
+  // For user sessions: find other user sessions with same agentId or name
   const sameAgentSessions = sessions.filter(s => {
-    // Match by agentId or by name if agentId not available
+    // Don't include self
+    if (s.id === activeSessionId) return false;
+    
+    // If current is a system agent (has isSystemAgent flag), match by agentId
+    if (currentSession?.isSystemAgent) {
+      return s.agentId === currentSession.id;
+    }
+    
+    // For user sessions, match by agentId or name
     if (currentSession?.agentId && s.agentId === currentSession.agentId) return true;
-    if (currentSession?.name && s.name === currentSession.name && s.id !== activeSessionId) return true;
+    if (currentSession?.name && s.name === currentSession.name) return true;
     return false;
   });
 
@@ -205,6 +219,12 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
   // --- Effects ---
   useEffect(() => {
     isInitialLoad.current = true; // Reset scroll behavior for new session
+    // Abort any ongoing request when switching sessions
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
     loadHistory();
   }, [activeSessionId]);
 
@@ -308,7 +328,7 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
       if (d?.success && Array.isArray(d.messages)) {
         // Capture the session/model at load time as a FROZEN fallback for old messages
         // without stored snapshots. This prevents renames from retroactively polluting old messages.
-        const loadTimeSession = sessions.find(s => s.id === activeSessionId);
+        const loadTimeSession = sessions.find(s => s.id === activeSessionId) || systemAgents.find(s => s.id === activeSessionId);
         const loadTimeAgentName = loadTimeSession?.name || aiName || '';
         const loadTimeModel = loadTimeSession?.model || currentModel || '';
 
@@ -858,11 +878,18 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
             >
               <Menu className="w-6 h-6" />
             </button>
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              <h1 className="text-[17px] sm:text-lg font-bold text-slate-900 leading-tight truncate">
-                {aiName}
+            <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+              <h1 className="text-[17px] sm:text-lg font-bold text-slate-900 leading-tight truncate flex items-center gap-2">
+                <span className="truncate" title={activeSessionName || aiName}>
+                  {activeSessionName || aiName}
+                </span>
+                {currentSession?.key && (
+                  <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded truncate flex-shrink-0" title={decodeURIComponent(currentSession.key)}>
+                    {decodeURIComponent(currentSession.key)}
+                  </span>
+                )}
               </h1>
-              <div className={`flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm ${isConnected ? 'text-emerald-600' : 'text-red-500'}`}>
+              <div className={`flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm flex-shrink-0 ${isConnected ? 'text-emerald-600' : 'text-red-500'}`}>
                 <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-red-500'} ${isLoading && isConnected ? 'animate-pulse' : ''}`}></span>
                 <span className={`font-medium ${isLoading && isConnected ? 'animate-pulse' : ''}`}>
                   {!isConnected ? '未连接' : (isLoading ? '正在输入...' : '已连接')}

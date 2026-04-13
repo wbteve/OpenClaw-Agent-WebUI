@@ -22,6 +22,30 @@ export default function App() {
     return { view: 'chat' as ViewType, tab: 'gateway' as SettingsTab };
   };
 
+  // Parse URL search params for deep linking
+  // Note: Since the URL format is #chat?session=xxx, the ? is after #, so we need to parse from hash
+  const getSessionFromUrl = (): string | null => {
+    // First try window.location.search (standard query string)
+    let params = new URLSearchParams(window.location.search);
+    let sessionParam = params.get('session');
+    
+    // If not found, try parsing from hash (for URLs like #chat?session=xxx)
+    if (!sessionParam) {
+      const hash = window.location.hash;
+      const hashMatch = hash.match(/\?(.*)$/);  // Extract everything after ? in the hash
+      if (hashMatch && hashMatch[1]) {
+        params = new URLSearchParams(hashMatch[1]);
+        sessionParam = params.get('session');
+      }
+    }
+    
+    if (sessionParam) {
+      console.log('[DeepLink] Found session param:', sessionParam);
+      return decodeURIComponent(sessionParam);
+    }
+    return null;
+  };
+
   const initialState = getHashState();
 
   const [currentView, setCurrentView] = useState<ViewType>(
@@ -34,7 +58,8 @@ export default function App() {
     return localStorage.getItem('clawui_active_session') || '';
   });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [sessions, setSessions] = useState<{id: string, name: string, characterId?: string, model?: string}[]>([]);
+  const [sessions, setSessions] = useState<{id: string, name: string, characterId?: string, model?: string, key?: string}[]>([]);
+  const [systemAgents, setSystemAgents] = useState<{id: string, name: string, characterId?: string, model?: string, key?: string}[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
 
   // --- Hash Routing Integration for Back Gesture & Deep Linking ---
@@ -89,16 +114,118 @@ export default function App() {
 
   const reloadSessions = async () => {
     try {
-      const res = await fetch('/api/sessions');
-      const data = await res.json();
-      setSessions(data);
+      // Fetch both /api/agents (authoritative list from openclaw CLI) and /api/sessions (user sessions)
+      const [agentsRes, sessionsRes] = await Promise.all([
+        fetch('/api/agents'),
+        fetch('/api/sessions')
+      ]);
+      
+      const agentsData = await agentsRes.json();
+      const sessionsData = await sessionsRes.json();
+      
+      // Use /api/agents for system agents (from openclaw CLI - authoritative)
+      const cliAgents = agentsData.agents || [];
+      
+      // Filter out agents that are in CLI list from user sessions to avoid duplicates
+      const cliAgentIds = new Set(cliAgents.map((a: any) => a.id));
+      const userSessions = (sessionsData.userSessions || sessionsData || []).filter(
+        (s: any) => !cliAgentIds.has(s.id)
+      );
+      
+      // Add isSystemAgent flag to CLI agents
+      const systemAgentsFromCli = cliAgents.map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        model: a.model,
+        key: a.key,
+        isSystemAgent: true,
+        identity: a.identity,
+        workspace: a.workspace
+      }));
+      
+      setSystemAgents(systemAgentsFromCli);
+      setSessions(userSessions);
       setSessionsLoaded(true);
-      // Auto-select first session if currently active is not in the list or empty
-      if (data.length > 0) {
+      
+      // Combine for auto-select logic (both system + user for selection)
+      const allSessions = [...systemAgentsFromCli, ...userSessions];
+      
+      // Default behavior: select previously active session or first available
+      if (allSessions.length > 0) {
         setActiveSessionId(prev => {
-          const exists = data.find((s: any) => s.id === prev);
-          return exists ? prev : data[0].id;
+          const exists = allSessions.find((s: any) => s.id === prev);
+          return exists ? prev : allSessions[0].id;
         });
+      }
+    } catch (err) {
+      console.error('Failed to reload sessions:', err);
+    }
+  };
+
+  // Helper function to find matching session from sessionKey
+  const findSessionByKey = (sessionKey: string, allSessions: any[]): any => {
+    return allSessions.find((s: any) => {
+      // Match by id directly
+      if (s.id === sessionKey) return true;
+      // Match by full key
+      if (s.key === sessionKey) return true;
+      // Match by last segment of sessionKey (the actual sessionId)
+      const parts = sessionKey.split(':');
+      const lastPart = parts[parts.length - 1];
+      if (lastPart && (s.id === lastPart || s.key?.endsWith(`:${lastPart}`))) return true;
+      return false;
+    });
+  };
+
+  // Reload sessions with a specific sessionKey from URL (for deep linking)
+  const reloadSessionsWithSessionKey = async (sessionKey: string) => {
+    try {
+      // Fetch both /api/agents (authoritative list from openclaw CLI) and /api/sessions (user sessions)
+      const [agentsRes, sessionsRes] = await Promise.all([
+        fetch('/api/agents'),
+        fetch('/api/sessions')
+      ]);
+      
+      const agentsData = await agentsRes.json();
+      const sessionsData = await sessionsRes.json();
+      
+      // Use /api/agents for system agents (from openclaw CLI - authoritative)
+      const cliAgents = agentsData.agents || [];
+      
+      // Filter out agents that are in CLI list from user sessions to avoid duplicates
+      const cliAgentIds = new Set(cliAgents.map((a: any) => a.id));
+      const userSessions = (sessionsData.userSessions || sessionsData || []).filter(
+        (s: any) => !cliAgentIds.has(s.id)
+      );
+      
+      // Add isSystemAgent flag to CLI agents
+      const systemAgentsFromCli = cliAgents.map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        model: a.model,
+        key: a.key,
+        isSystemAgent: true,
+        identity: a.identity,
+        workspace: a.workspace
+      }));
+      
+      setSystemAgents(systemAgentsFromCli);
+      setSessions(userSessions);
+      setSessionsLoaded(true);
+      
+      // Combine for matching
+      const allSessions = [...systemAgentsFromCli, ...userSessions];
+      
+      // Find matching session for the URL sessionKey
+      const found = findSessionByKey(sessionKey, allSessions);
+      
+      if (found) {
+        console.log('[DeepLink] Found matching session:', found.id, found.name);
+        setActiveSessionId(found.id);
+      } else {
+        console.warn('[DeepLink] No matching session found for:', sessionKey);
+        // Fallback to first session
+        setActiveSessionId(allSessions[0]?.id || '');
       }
     } catch (err) {
       console.error('Failed to reload sessions:', err);
@@ -163,7 +290,16 @@ export default function App() {
     };
 
     checkStatus();
-    reloadSessions();
+    
+    // Check for deep-link session parameter in URL and apply immediately
+    const urlSessionKey = getSessionFromUrl();
+    if (urlSessionKey) {
+      console.log('[DeepLink] Found session in URL:', urlSessionKey);
+      // Directly reload sessions with the URL sessionKey
+      reloadSessionsWithSessionKey(urlSessionKey);
+    } else {
+      reloadSessions();
+    }
     const timer = setInterval(checkStatus, 10000);
     return () => clearInterval(timer);
   }, []);
@@ -189,6 +325,7 @@ export default function App() {
         setActiveSessionId={setActiveSessionId}
         isMobileMenuOpen={isMobileMenuOpen}
         sessions={sessions}
+        systemAgents={systemAgents}
         sessionsLoaded={sessionsLoaded}
         reloadSessions={reloadSessions}
         reorderSessions={reorderSessions}
@@ -201,6 +338,7 @@ export default function App() {
             activeSessionId={activeSessionId} 
             onMenuClick={() => navigateTo(currentView, settingsTab, true)}
             sessions={sessions}
+            systemAgents={systemAgents}
             onSessionChange={setActiveSessionId}
           />
         ) : currentView === 'groupchat' ? (

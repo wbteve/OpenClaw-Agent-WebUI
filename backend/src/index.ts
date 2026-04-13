@@ -1186,16 +1186,120 @@ app.put('/api/characters/:agentId/user-md', (req, res) => {
   res.json({ success: true });
 });
 
+// Get agents list directly from openclaw CLI - runs `openclaw agents list`
+app.get('/api/agents', async (_req, res) => {
+  try {
+    const { stdout } = await execPromise('openclaw agents list', { timeout: 10000 });
+    
+    // Parse the output format:
+    // - main (default)
+    //   Workspace: ~/.openclaw/workspace-main
+    //   Model: MiniMax/MiniMax-M2.5
+    const agents: any[] = [];
+    const lines = stdout.split('\n');
+    let currentAgent: any = null;
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      
+      // Agent header line like "- main (default)" or "- ros2-architect (ROS2架构师)"
+      const headerMatch = trimmed.match(/^- (\S+)(?:\s+\(([^)]+)\))?$/);
+      if (headerMatch) {
+        // Save previous agent if exists
+        if (currentAgent) {
+          agents.push(currentAgent);
+        }
+        currentAgent = {
+          id: headerMatch[1],
+          name: headerMatch[2] || headerMatch[1], // Use alias as name if present, else id
+          isDefault: trimmed.includes('(default)'),
+          workspace: '',
+          model: '',
+          identity: ''
+        };
+        continue;
+      }
+      
+      if (currentAgent) {
+        // Workspace line
+        if (trimmed.startsWith('Workspace:')) {
+          currentAgent.workspace = trimmed.substring('Workspace:'.length).trim();
+          continue;
+        }
+        // Model line
+        if (trimmed.startsWith('Model:')) {
+          currentAgent.model = trimmed.substring('Model:'.length).trim();
+          continue;
+        }
+        // Identity line
+        if (trimmed.startsWith('Identity:')) {
+          currentAgent.identity = trimmed.substring('Identity:'.length).trim();
+          continue;
+        }
+      }
+    }
+    
+    // Don't forget the last agent
+    if (currentAgent) {
+      agents.push(currentAgent);
+    }
+    
+    // Generate session key for each agent
+    const agentsWithKey = agents.map(a => ({
+      ...a,
+      key: `agent:${a.id}:chat:${a.id}`
+    }));
+    
+    res.json({ agents: agentsWithKey });
+  } catch (err: any) {
+    console.error('[API /api/agents] Failed to run openclaw agents list:', err);
+    res.status(500).json({ error: 'Failed to get agents list', details: err.message });
+  }
+});
+
 // Get all sessions - from both local DB and OpenClaw gateway
 app.get('/api/sessions', async (_req, res) => {
   // Get local sessions from sessionManager
   const localSessions = sessionManager.getAllSessions();
+  
+  // Read system agents from openclaw.json for classification
+  const systemAgents = agentProvisioner.readAllAgents();
+  const systemAgentIds = new Set(
+    systemAgents
+      .filter(a => a.name && a.name !== a.id) // Has Chinese name (name differs from id)
+      .map(a => a.id)
+  );
+  
+  // Classify sessions into system agents and user sessions
+  const systemSessions: any[] = [];
+  const userSessions: any[] = [];
+  
   const localSessionsWithModel = localSessions.map(session => {
+    const model = agentProvisioner.readAgentModel(session.agentId) || '';
+    const isSystemAgent = systemAgentIds.has(session.agentId || session.id);
+    // Generate session key for local sessions based on agentId
+    const sessionKey = `agent:${session.agentId || session.id}:chat:${session.id}`;
     return {
       ...session,
-      model: agentProvisioner.readAgentModel(session.agentId) || ''
+      model,
+      isSystemAgent,
+      key: sessionKey
     };
   });
+  
+  // Classify
+  for (const session of localSessionsWithModel) {
+    if (session.isSystemAgent) {
+      // Find the original name from systemAgents if available
+      const systemAgent = systemAgents.find(a => a.id === (session.agentId || session.id));
+      if (systemAgent?.name) {
+        session.name = systemAgent.name;
+      }
+      systemSessions.push(session);
+    } else {
+      userSessions.push(session);
+    }
+  }
 
   // Also try to get sessions from OpenClaw gateway
   try {
@@ -1218,7 +1322,6 @@ app.get('/api/sessions', async (_req, res) => {
       if (gwSessionsList.length > 0) {
         // Merge gateway sessions with local sessions
         const localIds = new Set(localSessions.map(s => s.id));
-        const mergedSessions = [...localSessionsWithModel];
         const defaultModel = gwData.defaults?.model || '';
 
         for (const gs of gwSessionsList) {
@@ -1232,29 +1335,40 @@ app.get('/api/sessions', async (_req, res) => {
             const parts = gs.key.split(':');
             if (parts.length >= 2) agentId = parts[1];
           }
+          
+          const isSystemAgent = systemAgentIds.has(agentId);
+          const systemAgent = systemAgents.find(a => a.id === agentId);
 
           // Add gateway session that isn't local yet
-          mergedSessions.push({
+          const newSession = {
             id: gsId,
-            name: gs.name || agentId || gsId,
+            name: gs.name || (systemAgent?.name) || agentId || gsId,
             agentId: agentId,
             model: gs.model || defaultModel,
             position: 999,
             updated_at: gs.updatedAt || Date.now(),
             created_at: gs.createdAt || Date.now(),
             key: gs.key || null,  // Full session key like agent:ros2-devops:chat:ros2-devops
-          } as any);
+            isSystemAgent
+          };
+          
+          if (isSystemAgent) {
+            systemSessions.push(newSession);
+          } else {
+            userSessions.push(newSession);
+          }
         }
-
-        return res.json(mergedSessions);
       }
     }
   } catch (err) {
     console.error('[Sessions] Failed to fetch gateway sessions:', err);
   }
 
-  // Fallback to local only
-  res.json(localSessionsWithModel);
+  // Return both categories
+  res.json({
+    systemAgents: systemSessions,
+    userSessions: userSessions
+  });
 });
 
 app.post('/api/sessions', async (req, res) => {
@@ -1467,6 +1581,10 @@ app.post('/api/chat', async (req, res) => {
     db.saveMessage({ session_key: sessionId, role: 'user', content: displayContent || String(message) });
     const client = await getConnection(sessionId);
     const agentId = sessionInfo?.agentId || 'main';
+    
+    // Construct the actual sessionKey that will be sent to OpenClaw
+    const actualSessionKey = `agent:${agentId}:chat:${sessionId}`;
+    console.log(`[Chat] Sending message to sessionKey=${actualSessionKey}`);
 
     // Resolve agent name and model for per-message snapshot
     const allCharacters = db.getCharacters();
@@ -1489,6 +1607,15 @@ app.post('/api/chat', async (req, res) => {
     let streamEnded = false;
     let idleTimeout: NodeJS.Timeout;
 
+    // Send the message (non-blocking) and get the runId
+    const { runId: expectedRunId } = await client.sendChatMessageStreaming({
+      sessionKey: actualSessionKey, // FIX: Use actualSessionKey instead of sessionId
+      message: outgoingMessage,
+      agentId: agentId
+    });
+    console.log(`[Chat] Sent message with expectedRunId=${expectedRunId}, sessionKey=${actualSessionKey}`);
+
+    // Create event handlers that filter by runId
     const cleanup = () => {
       clearTimeout(idleTimeout);
       client.off('chat.delta', onDelta);
@@ -1506,41 +1633,46 @@ app.post('/api/chat', async (req, res) => {
           const errorMsg = lastText ? 'Response interrupted (idle timeout).' : 'Response timed out (no connection).';
           const rewritten = rewriteOpenClawMediaPaths(lastText || errorMsg);
           db.saveMessage({ session_key: sessionId, role: 'assistant', content: rewritten, model_used: modelUsed, agent_id: agentId, agent_name: agentName });
-          res.write(`data: ${JSON.stringify({ type: 'final', text: rewritten })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'final', text: rewritten, runId: expectedRunId })}\n\n`);
           res.end();
         }
       }, 600000); 
     };
 
     const onDelta = (data: { sessionKey: string; runId: string; text: string }) => {
-      if (streamEnded) return;
+      // FIX: Only handle events that match the expected runId for this request
+      if (streamEnded || data.runId !== expectedRunId) return;
       resetIdleTimeout();
       lastText = data.text;
+      console.log(`[Chat SSE delta] sessionId=${sessionId}, sessionKey=${data.sessionKey}, runId=${data.runId}, textLength=${data.text?.length || 0}`);
       const rewritten = rewriteOpenClawMediaPaths(data.text);
-      res.write(`data: ${JSON.stringify({ type: 'delta', text: rewritten })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'delta', text: rewritten, runId: expectedRunId })}\n\n`);
     };
 
     const onFinal = (data: { sessionKey: string; runId: string; text: string }) => {
-      if (streamEnded) return;
+      // FIX: Only handle events that match the expected runId for this request
+      if (streamEnded || data.runId !== expectedRunId) return;
       streamEnded = true;
       cleanup();
       const finalText = data.text || lastText;
+      console.log(`[Chat SSE final] sessionId=${sessionId}, gatewaySessionKey=${data.sessionKey}, runId=${data.runId}, textLength=${finalText?.length || 0}, first50chars=${finalText?.substring(0, 50)}`);
       const rewritten = rewriteOpenClawMediaPaths(finalText);
 
       // Save final response to DB
       db.saveMessage({ session_key: sessionId, role: 'assistant', content: rewritten, model_used: modelUsed, agent_id: agentId, agent_name: agentName });
 
-      res.write(`data: ${JSON.stringify({ type: 'final', text: rewritten })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'final', text: rewritten, runId: expectedRunId })}\n\n`);
       res.end();
     };
 
     const onError = (data: { sessionKey: string; runId: string; error: string }) => {
-      if (streamEnded) return;
+      // FIX: Only handle events that match the expected runId for this request
+      if (streamEnded || data.runId !== expectedRunId) return;
       streamEnded = true;
       cleanup();
       const errorMsg = `❌ Error: ${data.error}`;
       db.saveMessage({ session_key: sessionId, role: 'assistant', content: errorMsg, model_used: modelUsed, agent_id: agentId, agent_name: agentName });
-      res.write(`data: ${JSON.stringify({ type: 'final', text: errorMsg })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'final', text: errorMsg, runId: expectedRunId })}\n\n`);
       res.end();
     };
 
@@ -1550,13 +1682,6 @@ app.post('/api/chat', async (req, res) => {
     client.on('chat.error', onError);
 
     resetIdleTimeout();
-
-    // Send the message (non-blocking)
-    const { runId } = await client.sendChatMessageStreaming({
-      sessionKey: sessionId,
-      message: outgoingMessage,
-      agentId: agentId
-    });
 
     // Clean up on client disconnect
     req.on('close', () => {

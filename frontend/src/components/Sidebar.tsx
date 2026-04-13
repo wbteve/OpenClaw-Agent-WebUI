@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash } from 'lucide-react';
+import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash, ChevronRightIcon } from 'lucide-react';
 import { Reorder } from 'motion/react';
 import { ViewType, SettingsTab } from '../App';
 
@@ -10,10 +10,139 @@ interface SidebarProps {
   setActiveSessionId: (id: string) => void;
   isMobileMenuOpen: boolean;
   sessions: {id: string, name: string}[];
+  systemAgents?: {id: string, name: string}[];
   sessionsLoaded: boolean;
   reloadSessions: () => Promise<void>;
   reorderSessions: (newSessions: {id: string, name: string}[]) => Promise<void>;
   navigateTo: (view: ViewType, tab?: SettingsTab, openMenu?: boolean) => void;
+}
+
+// Session Card with Tooltip - must be a separate component for hooks
+function SessionCardWithTooltip({ 
+  session, 
+  isActive, 
+  onSelect, 
+  onContextMenu 
+}: { 
+  session: {id: string, name: string, isSystemAgent?: boolean, model?: string, key?: string};
+  isActive: boolean;
+  onSelect: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+
+  const handleMouseEnter = (e: React.MouseEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    // Position tooltip to the right of the card, vertically centered
+    const tooltipX = rect.right + 12;
+    const tooltipY = rect.top + rect.height / 2;
+    setTooltipPos({ x: tooltipX, y: tooltipY });
+    setShowTooltip(true);
+  };
+  
+  const handleMouseLeave = () => {
+    setShowTooltip(false);
+  };
+  
+  // Build tooltip content
+  const tooltipContent = (
+    <div 
+      className="bg-slate-800 text-white text-xs rounded-xl shadow-2xl p-4 min-w-[280px] max-w-[380px] border border-slate-600"
+      style={{ 
+        transform: 'translateY(-50%)',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)'
+      }}
+    >
+      <div className="font-bold mb-2 text-sm truncate border-b border-slate-600 pb-2">
+        {session.name || `智能体 ${session.id}`}
+      </div>
+      <div className="space-y-1.5 text-slate-300">
+        {session.key && (
+          <div className="flex items-start gap-2">
+            <span className="text-slate-400 shrink-0 w-12">Key:</span>
+            <span className="font-mono text-slate-200 break-all text-[10px]">{session.key}</span>
+          </div>
+        )}
+        <div className="flex items-start gap-2">
+          <span className="text-slate-400 shrink-0 w-12">ID:</span>
+          <span className="font-mono text-slate-200 break-all">{session.id}</span>
+        </div>
+        {session.model && (
+          <div className="flex items-start gap-2">
+            <span className="text-slate-400 shrink-0 w-12">模型:</span>
+            <span className="font-mono text-slate-200 break-all">{session.model}</span>
+          </div>
+        )}
+        <div className="flex items-center gap-2 pt-1">
+          <span className="text-slate-400 shrink-0 w-12">类型:</span>
+          <span className={session.isSystemAgent ? 'text-blue-400 font-medium' : 'text-green-400 font-medium'}>
+            {session.isSystemAgent ? '⚙ 系统助手' : '👤 用户会话'}
+          </span>
+        </div>
+      </div>
+      {/* Arrow pointing left */}
+      <div 
+        className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0"
+        style={{ 
+          borderTop: '8px solid transparent', 
+          borderBottom: '8px solid transparent', 
+          borderRight: '8px solid #1e293b'
+        }}
+      ></div>
+    </div>
+  );
+  
+  return (
+    <div
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      title={`${session.name || session.id}${session.model ? ` - ${session.model}` : ''}`}
+      className={`w-full group text-left py-2.5 px-3 text-sm rounded-xl transition-all duration-200 flex items-center justify-between cursor-pointer border ${isActive ? 'bg-brand-50 border-brand-200 text-slate-800' : 'text-slate-700 hover:bg-slate-100 border-transparent'}`}
+    >
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        {session.isSystemAgent && (
+          <span className="flex-shrink-0 w-5 h-5 rounded bg-blue-100 text-blue-600 flex items-center justify-center text-[10px] font-bold">
+            ⚙
+          </span>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${isActive ? 'font-semibold' : 'font-medium'}`}>
+            {session.name || `智能体 ${session.id}`}
+          </div>
+          {session.model && (
+            <div className="text-[11px] mt-0.5 text-slate-400 truncate">
+              {session.model}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+        <button
+          onClick={onContextMenu}
+          className="p-1.5 text-slate-400 hover:text-brand-500 hover:bg-brand-50 rounded-lg transition-all"
+          title="更多操作"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      </div>
+      
+      {/* Floating Tooltip - positioned fixed */}
+      {showTooltip && (
+        <div 
+          className="fixed z-[99999] pointer-events-none"
+          style={{ 
+            left: `${tooltipPos.x}px`, 
+            top: `${tooltipPos.y}px`,
+          }}
+        >
+          {tooltipContent}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SessionSkeleton() {
@@ -68,6 +197,7 @@ export default function Sidebar({
   setActiveSessionId, 
   isMobileMenuOpen, 
   sessions,
+  systemAgents = [],
   sessionsLoaded,
   reloadSessions,
   reorderSessions,
@@ -83,6 +213,10 @@ export default function Sidebar({
       setEnableReorder(true);
     });
   }, []);
+
+  // Collapse state for sections
+  const [agentsCollapsed, setAgentsCollapsed] = useState(false);
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
 
   // Modal State
   const [newSessionData, setNewSessionData] = useState({ 
@@ -347,33 +481,16 @@ export default function Sidebar({
   };
 
 
-  const renderSessionCard = (s: {id: string, name: string}) => (
-    <div
-      onClick={() => { setActiveSessionId(s.id); navigateTo('chat', settingsTab, false); }}
-      onContextMenu={(e) => handleContextMenu(e, s)}
-      className={`w-full group text-left py-2.5 px-3 text-sm rounded-xl transition-all duration-200 flex items-center justify-between cursor-pointer border ${activeSessionId === s.id ? 'bg-brand-50 border-brand-200 text-slate-800' : 'text-slate-700 hover:bg-slate-100 border-transparent'}`}
-    >
-      <div className="flex-1 min-w-0">
-        <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${activeSessionId === s.id ? 'font-semibold' : 'font-medium'}`}>
-          {s.name || `智能体 ${s.id}`}
-        </div>
-        {(s as any).model && (
-          <div className="text-[11px] mt-0.5 text-slate-400 truncate">
-            {(s as any).model}
-          </div>
-        )}
-      </div>
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-        <button
-          onClick={(e) => handleContextMenu(e, s)}
-          className="p-1.5 text-slate-400 hover:text-brand-500 hover:bg-brand-50 rounded-lg transition-all"
-          title="更多操作"
-        >
-          <MoreHorizontal className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
+  const renderSessionCard = (s: {id: string, name: string, isSystemAgent?: boolean, model?: string, key?: string}) => {
+    return (
+      <SessionCardWithTooltip
+        session={s}
+        isActive={activeSessionId === s.id}
+        onSelect={() => { setActiveSessionId(s.id); navigateTo('chat', settingsTab, false); }}
+        onContextMenu={(e: React.MouseEvent) => handleContextMenu(e, s)}
+      />
+    );
+  };
 
 
   if (currentView === 'settings') {
@@ -488,45 +605,78 @@ export default function Sidebar({
           新建Agent
         </button>
       </div>
-      <div className="mb-2 px-3">
+      {/* System Agents Section - 助手列表 */}
+      <div className="px-3 py-1.5 flex items-center justify-between cursor-pointer hover:bg-slate-100 rounded-lg transition-colors" onClick={() => setAgentsCollapsed(!agentsCollapsed)}>
         <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">助手列表</span>
+        <ChevronRightIcon className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${agentsCollapsed ? '' : 'rotate-90'}`} />
       </div>
-      <div className="flex-1 overflow-y-auto sidebar-scroll px-3 py-1 min-h-0">
+      <div className={`flex-1 overflow-y-auto sidebar-scroll px-3 py-1 min-h-0 transition-all duration-200 ${agentsCollapsed ? 'max-h-0 py-0 opacity-0' : 'max-h-[500px] py-1'}`}>
         {!sessionsLoaded ? (
           <SessionSkeleton />
-        ) : enableReorder ? (
-        <Reorder.Group axis="y" values={sessions} onReorder={reorderSessions} className="space-y-1" layout={false}>
-          {sessions.length > 0 ? (
-            sessions.map((s) => (
-              <Reorder.Item
-                key={s.id}
-                value={s}
-                className="w-full"
-                initial={false}
-              >
-                {renderSessionCard(s)}
-              </Reorder.Item>
-            ))
-          ) : (
-            <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 mt-2">
-               <p className="text-sm text-slate-400 font-medium">暂无智能体</p>
-            </div>
-          )}
-        </Reorder.Group>
         ) : (
-          <ul className="space-y-1">
-            {sessions.length > 0 ? (
-              sessions.map((s) => (
-                <li key={s.id} className="w-full">
-                  {renderSessionCard(s)}
-                </li>
-              ))
-            ) : (
-              <div className="px-4 py-8 text-center bg-white/50 rounded-2xl border border-dashed border-gray-200 mt-2">
-                <p className="text-sm text-gray-400 font-medium">暂无角色记录</p>
+          <>
+            {/* 系统预置 Agents */}
+            {systemAgents.length > 0 && (
+              <div className="mb-3">
+                <ul className="space-y-1">
+                  {systemAgents.map((s) => (
+                    <li key={s.id} className="w-full">
+                      {renderSessionCard({ ...s, isSystemAgent: true })}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
-          </ul>
+            
+            {/* Divider + 我的会话 Header */}
+            {systemAgents.length > 0 && sessions.length > 0 && (
+              <div className="my-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                  <span 
+                    className="text-[10px] text-slate-400 font-medium uppercase tracking-wider cursor-pointer hover:text-slate-600 flex items-center gap-1"
+                    onClick={(e) => { e.stopPropagation(); setSessionsCollapsed(!sessionsCollapsed); }}
+                  >
+                    我的会话
+                    <ChevronRightIcon className={`w-3 h-3 transition-transform duration-200 ${sessionsCollapsed ? '' : 'rotate-90'}`} />
+                  </span>
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                </div>
+              </div>
+            )}
+            
+            {/* User Sessions - wrapped in collapsible div */}
+            <div className={`transition-all duration-200 ${sessionsCollapsed ? 'max-h-0 py-0 opacity-0 overflow-hidden' : 'max-h-[500px] py-1'}`}>
+            {sessions.length > 0 ? (
+              enableReorder ? (
+                <Reorder.Group axis="y" values={sessions} onReorder={reorderSessions} className="space-y-1" layout={false}>
+                  {sessions.map((s) => (
+                    <Reorder.Item
+                      key={s.id}
+                      value={s}
+                      className="w-full"
+                      initial={false}
+                    >
+                      {renderSessionCard(s)}
+                    </Reorder.Item>
+                  ))}
+                </Reorder.Group>
+              ) : (
+                <ul className="space-y-1">
+                  {sessions.map((s) => (
+                    <li key={s.id} className="w-full">
+                      {renderSessionCard(s)}
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : systemAgents.length === 0 ? (
+              <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 mt-2">
+                <p className="text-sm text-slate-400 font-medium">暂无智能体</p>
+              </div>
+            ) : null}
+            </div> {/* End of sessions collapsible div */}
+          </>
         )}
       </div>
 
