@@ -49,9 +49,14 @@ export class AgentProvisioner {
 
   /**
    * Get the workspace path for a given agentId.
-   * Rule: agent "abc" uses "workspace-abc". No special cases.
+   * Rule: agent "abc" uses "workspace-abc".
+   * Special case: ROS2-* agents use "ros2-team/{role}/"
    */
   getWorkspacePath(agentId: string): string {
+    if (agentId.toLowerCase().startsWith('ros2-')) {
+      const role = agentId.substring('ros2-'.length);
+      return path.join(this.openclawDir, 'ros2-team', role);
+    }
     return path.join(this.openclawDir, `workspace-${agentId}`);
   }
 

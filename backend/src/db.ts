@@ -184,11 +184,67 @@ export class DB {
   }
 
   getMessages(sessionKey: string, limit = 100): ChatRow[] {
-    return this.db
+    // Try exact match first, then case-insensitive match
+    let rows = this.db
       .prepare(
-        "SELECT id, session_key, role, content, model_used, agent_id, agent_name, strftime('%Y-%m-%dT%H:%M:%SZ', created_at) as created_at FROM chat_messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
+        "SELECT id, session_key, role, content, model_used, agent_id, agent_name, created_at FROM chat_messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
       )
       .all(sessionKey, limit) as ChatRow[];
+    
+    // If no results, try case-insensitive match
+    if (rows.length === 0) {
+      rows = this.db
+        .prepare(
+          "SELECT id, session_key, role, content, model_used, agent_id, agent_name, created_at FROM chat_messages WHERE LOWER(session_key) = LOWER(?) ORDER BY id DESC LIMIT ?"
+        )
+        .all(sessionKey, limit) as ChatRow[];
+    }
+    
+    // Convert SQLite DATETIME strings to ISO format for frontend
+    return rows.map(row => ({
+      ...row,
+      created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+    }));
+  }
+
+  // Search chat messages across all sessions
+  searchMessages(query: string, limit = 50): Array<{ 
+    id: number;
+    session_key: string;
+    role: string;
+    content: string;
+    model_used?: string;
+    agent_id?: string;
+    agent_name?: string;
+    created_at: string;
+    session_name?: string;
+  }> {
+    const searchQuery = `%${query}%`;
+    const rows = this.db
+      .prepare(`
+        SELECT 
+          cm.id, 
+          cm.session_key, 
+          cm.role, 
+          cm.content, 
+          cm.model_used, 
+          cm.agent_id, 
+          cm.agent_name, 
+          cm.created_at,
+          s.name as session_name
+        FROM chat_messages cm
+        LEFT JOIN sessions s ON cm.session_key = s.id
+        WHERE cm.content LIKE ?
+        ORDER BY cm.created_at DESC
+        LIMIT ?
+      `)
+      .all(searchQuery, limit) as any[];
+    
+    // Convert SQLite DATETIME strings to ISO format
+    return rows.map(row => ({
+      ...row,
+      created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+    }));
   }
 
   saveFile(file: {

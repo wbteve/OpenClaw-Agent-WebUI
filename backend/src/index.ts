@@ -1479,6 +1479,73 @@ app.get('/api/sessions/:id/configs', (req, res) => {
   });
 });
 
+// --- Agent Workspace File Management ---
+app.get('/api/agents/:agentId/files', (req, res) => {
+  try {
+    const agentId = req.params.agentId;
+    const workspacePath = agentProvisioner.getWorkspacePath(agentId);
+    
+    if (!fs.existsSync(workspacePath)) {
+      return res.json({ success: true, files: [], workspacePath });
+    }
+    
+    const files = fs.readdirSync(workspacePath);
+    const mdFiles = files
+      .filter(file => file.endsWith('.md') && !file.startsWith('.'))
+      .map(file => {
+        const filePath = path.join(workspacePath, file);
+        const stats = fs.statSync(filePath);
+        return {
+          name: file,
+          size: stats.size,
+          modified: stats.mtime.toISOString()
+        };
+      });
+    
+    res.json({ success: true, files: mdFiles, workspacePath });
+  } catch (err: any) {
+    console.error('Failed to list agent files:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/agents/:agentId/files/:filename', (req, res) => {
+  try {
+    const agentId = req.params.agentId;
+    const filename = req.params.filename;
+    
+    // Security check: only allow .md files and prevent path traversal
+    if (!filename.endsWith('.md') || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ success: false, error: 'Invalid filename' });
+    }
+    
+    const content = agentProvisioner.readAgentFile(agentId, filename, '');
+    res.json({ success: true, content });
+  } catch (err: any) {
+    console.error('Failed to read agent file:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/agents/:agentId/files/:filename', (req, res) => {
+  try {
+    const agentId = req.params.agentId;
+    const filename = req.params.filename;
+    const { content } = req.body;
+    
+    // Security check: only allow .md files and prevent path traversal
+    if (!filename.endsWith('.md') || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ success: false, error: 'Invalid filename' });
+    }
+    
+    agentProvisioner.writeAgentFile(agentId, filename, content || '');
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to write agent file:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/sessions/reorder', (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids)) {
@@ -1547,6 +1614,22 @@ app.get('/api/history/:sessionId', async (req, res) => {
   
   // Fallback to local (empty)
   res.json({ success: true, messages: rows });
+});
+
+// Search chat messages across all sessions
+app.get('/api/search', (req, res) => {
+  const { q } = req.query;
+  if (!q || typeof q !== 'string' || q.trim().length === 0) {
+    return res.json({ success: true, results: [] });
+  }
+  
+  try {
+    const results = db.searchMessages(q.trim(), 100);
+    res.json({ success: true, results });
+  } catch (error: any) {
+    console.error('[Search] Failed to search messages:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.delete('/api/messages/:id', (req, res) => {

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash, ChevronRightIcon } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash, ChevronRightIcon, Search, User, Bot } from 'lucide-react';
 import { Reorder } from 'motion/react';
 import { ViewType, SettingsTab } from '../App';
 
@@ -109,12 +109,12 @@ function SessionCardWithTooltip({
           </span>
         )}
         <div className="flex-1 min-w-0">
-          <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${isActive ? 'font-semibold' : 'font-medium'}`}>
-            {session.name || `智能体 ${session.id}`}
+          <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${isActive ? 'font-semibold' : 'font-medium'} font-mono`}>
+            {session.key || session.id}
           </div>
-          {session.model && (
+          {session.name && (
             <div className="text-[11px] mt-0.5 text-slate-400 truncate">
-              {session.model}
+              {session.name}
             </div>
           )}
         </div>
@@ -217,6 +217,13 @@ export default function Sidebar({
   // Collapse state for sections
   const [agentsCollapsed, setAgentsCollapsed] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  
+  // Search states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Modal State
   const [newSessionData, setNewSessionData] = useState({ 
@@ -266,6 +273,17 @@ export default function Sidebar({
   // Model Selector Modal State
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [modelSessionId, setModelSessionId] = useState<string | null>(null);
+  
+  // Agent Files Editor Modal State
+  const [isFilesEditorOpen, setIsFilesEditorOpen] = useState(false);
+  const [filesEditorAgentId, setFilesEditorAgentId] = useState<string | null>(null);
+  const [filesEditorAgentName, setFilesEditorAgentName] = useState('');
+  const [agentFiles, setAgentFiles] = useState<any[]>([]);
+  const [agentWorkspacePath, setAgentWorkspacePath] = useState('');
+  const [activeFileTab, setActiveFileTab] = useState('SOUL.md');
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isSavingFile, setIsSavingFile] = useState(false);
 
   // Template contents for new agents
   const templates = {
@@ -307,6 +325,58 @@ export default function Sidebar({
 ## 示范：
 - 称呼：首席架构师助手。
 - 角色：负责代码审查、技术方案设计以及核心库维护。`
+  };
+
+  // --- Search Handler ---
+  const handleSearch = async (query: string) => {
+    setSearchQuery(query);
+    
+    if (query.trim().length < 2) {
+      setSearchResults([]);
+      setShowSearchResults(false);
+      return;
+    }
+    
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await res.json();
+      if (data.success) {
+        setSearchResults(data.results);
+        setShowSearchResults(true);
+      }
+    } catch (err) {
+      console.error('Search failed:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+  
+  // Navigate to search result
+  const handleSearchResultClick = (result: any) => {
+    // Extract session id from session_key
+    let sessionId = result.session_key;
+    // If session_key is like "agent:xxx:chat:xxx", extract the last part
+    if (sessionId.includes(':')) {
+      const parts = sessionId.split(':');
+      sessionId = parts[parts.length - 1];
+    }
+    
+    // Check if session exists in our lists
+    const sessionExists = [...sessions, ...systemAgents].some(s => s.id === sessionId);
+    
+    if (sessionExists) {
+      setActiveSessionId(sessionId);
+      navigateTo('chat');
+      setShowSearchResults(false);
+      setSearchQuery('');
+    } else {
+      // If session doesn't exist, try to use the session_key directly
+      setActiveSessionId(result.session_key);
+      navigateTo('chat');
+      setShowSearchResults(false);
+      setSearchQuery('');
+    }
   };
 
 
@@ -480,6 +550,65 @@ export default function Sidebar({
     }
   };
 
+  // --- Agent Files Editor Handlers ---
+  const handleEditAgentInfo = (session: {id: string, name: string}) => {
+    closeContextMenu();
+    setFilesEditorAgentId(session.id);
+    setFilesEditorAgentName(session.name || session.id);
+    setIsFilesEditorOpen(true);
+    loadAgentFiles(session.id);
+  };
+
+  const loadAgentFiles = async (agentId: string) => {
+    setIsLoadingFiles(true);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/files`);
+      const data = await res.json();
+      if (data.success) {
+        setAgentFiles(data.files);
+        setAgentWorkspacePath(data.workspacePath || '');
+        // Load content for each file
+        const contents: Record<string, string> = {};
+        for (const file of data.files) {
+          const fileRes = await fetch(`/api/agents/${agentId}/files/${file.name}`);
+          const fileData = await fileRes.json();
+          if (fileData.success) {
+            contents[file.name] = fileData.content;
+          }
+        }
+        setFileContents(contents);
+        if (data.files.length > 0) {
+          setActiveFileTab(data.files[0].name);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load agent files:', err);
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
+
+  const saveAgentFile = async (filename: string) => {
+    if (!filesEditorAgentId) return;
+    setIsSavingFile(true);
+    try {
+      const res = await fetch(`/api/agents/${filesEditorAgentId}/files/${filename}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: fileContents[filename] || '' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Refresh the files list
+        await loadAgentFiles(filesEditorAgentId);
+      }
+    } catch (err) {
+      console.error('Failed to save agent file:', err);
+    } finally {
+      setIsSavingFile(false);
+    }
+  };
+
 
   const renderSessionCard = (s: {id: string, name: string, isSystemAgent?: boolean, model?: string, key?: string}) => {
     return (
@@ -580,6 +709,7 @@ export default function Sidebar({
           </svg>
           群聊
         </button>
+        
         {/* 新建Agent按钮 */}
         <button
           onClick={() => {
@@ -599,18 +729,89 @@ export default function Sidebar({
             });
             setIsModalOpen(true);
           }}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 transition-all duration-200 bg-white font-medium text-sm active:scale-[0.98]"
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 transition-all duration-200 bg-white font-medium text-sm active:scale-[0.98] mb-2"
         >
           <Plus className="w-5 h-5" />
           新建Agent
         </button>
+        
+        {/* 搜索框 */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            onFocus={() => searchQuery.trim().length >= 2 && setShowSearchResults(true)}
+            onBlur={() => setTimeout(() => setShowSearchResults(false), 200)}
+            placeholder="搜索聊天记录..."
+            className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all"
+          />
+          {isSearching && (
+            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+              <div className="w-4 h-4 border-2 border-slate-300 border-t-brand-500 rounded-full animate-spin"></div>
+            </div>
+          )}
+          {searchQuery && !isSearching && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setSearchResults([]);
+                setShowSearchResults(false);
+              }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-all"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+          
+          {/* Search Results Dropdown */}
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-[400px] overflow-y-auto z-[100]">
+              <div className="p-2">
+                {searchResults.map((result, index) => (
+                  <button
+                    key={`${result.id}-${index}`}
+                    onClick={() => handleSearchResultClick(result)}
+                    className="w-full text-left p-3 rounded-lg hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-200 mb-1 last:mb-0"
+                  >
+                    <div className="flex items-center gap-2 mb-1.5">
+                      {result.role === 'user' ? (
+                        <User className="w-3.5 h-3.5 text-blue-500" />
+                      ) : (
+                        <Bot className="w-3.5 h-3.5 text-green-500" />
+                      )}
+                      <span className="text-xs font-semibold text-slate-700">
+                        {result.session_name || result.session_key}
+                      </span>
+                      <span className="text-xs text-slate-400 ml-auto">
+                        {new Date(result.created_at).toLocaleDateString('zh-CN')}
+                      </span>
+                    </div>
+                    <div className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
+                      {result.content.length > 150 ? result.content.substring(0, 150) + '...' : result.content}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* No Results */}
+          {showSearchResults && searchResults.length === 0 && searchQuery.trim().length >= 2 && !isSearching && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl p-4 text-center z-[100]">
+              <div className="text-slate-400 text-sm">未找到匹配的记录</div>
+            </div>
+          )}
+        </div>
       </div>
       {/* System Agents Section - 助手列表 */}
-      <div className="px-3 py-1.5 flex items-center justify-between cursor-pointer hover:bg-slate-100 rounded-lg transition-colors" onClick={() => setAgentsCollapsed(!agentsCollapsed)}>
+      <div className="px-3 py-1.5 flex items-center justify-between cursor-pointer hover:bg-slate-100 rounded-lg transition-colors mx-2" onClick={() => setAgentsCollapsed(!agentsCollapsed)}>
         <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">助手列表</span>
         <ChevronRightIcon className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${agentsCollapsed ? '' : 'rotate-90'}`} />
       </div>
-      <div className={`flex-1 overflow-y-auto sidebar-scroll px-3 py-1 min-h-0 transition-all duration-200 ${agentsCollapsed ? 'max-h-0 py-0 opacity-0' : 'max-h-[500px] py-1'}`}>
+      <div className={`flex-1 overflow-y-auto sidebar-scroll px-3 py-1 min-h-0 transition-all duration-200 ${agentsCollapsed ? 'max-h-0 py-0 opacity-0' : 'flex-1'}`}>
         {!sessionsLoaded ? (
           <SessionSkeleton />
         ) : (
@@ -680,12 +881,13 @@ export default function Sidebar({
         )}
       </div>
 
-      <div className="p-4 border-t border-gray-100 bg-gray-100/50">
+      {/* 系统设置按钮 - 贴在底边 */}
+      <div className="mt-auto px-3 py-2 border-t border-slate-200 bg-white">
         <button
           onClick={() => navigateTo('settings')}
-          className="flex items-center w-full py-3 px-4 text-gray-600 hover:text-gray-900 transition-colors font-bold text-sm rounded-xl hover:bg-gray-200 gap-3"
+          className="flex items-center w-full py-2.5 px-3 text-slate-600 hover:text-brand-600 hover:bg-brand-50 transition-all duration-200 font-medium text-sm rounded-xl gap-3"
         >
-          <Settings className="w-5 h-5 text-gray-400" />
+          <Settings className="w-5 h-5 text-slate-400" />
           系统设置
         </button>
       </div>
@@ -927,6 +1129,13 @@ export default function Sidebar({
               <Cpu className="w-4 h-4" />
               <span>指定API模型</span>
             </button>
+            <button
+              onClick={() => contextMenu.session && handleEditAgentInfo(contextMenu.session)}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+              <span>编辑信息</span>
+            </button>
             <div className="h-px bg-gray-100 my-1" />
             <button
               onClick={(e) => contextMenu.session && handleDeleteFromContext(e, contextMenu.session)}
@@ -1005,6 +1214,25 @@ export default function Sidebar({
           availableModels={availableModels}
           onClose={() => setIsModelModalOpen(false)}
           onSelect={submitModelChange}
+        />
+      )}
+      
+      {/* Agent Files Editor Modal */}
+      {isFilesEditorOpen && (
+        <AgentFilesEditorModal
+          isOpen={isFilesEditorOpen}
+          onClose={() => setIsFilesEditorOpen(false)}
+          agentId={filesEditorAgentId}
+          agentName={filesEditorAgentName}
+          workspacePath={agentWorkspacePath}
+          files={agentFiles}
+          activeFileTab={activeFileTab}
+          setActiveFileTab={setActiveFileTab}
+          fileContents={fileContents}
+          setFileContents={setFileContents}
+          isLoading={isLoadingFiles}
+          isSaving={isSavingFile}
+          onSave={saveAgentFile}
         />
       )}
     </>
@@ -1125,6 +1353,134 @@ function ModelSelectModal({ modelSessionId, sessions, availableModels, onClose, 
             }
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Agent Files Editor Modal Component
+function AgentFilesEditorModal({ 
+  isOpen, 
+  onClose, 
+  agentId, 
+  agentName, 
+  workspacePath, 
+  files, 
+  activeFileTab, 
+  setActiveFileTab, 
+  fileContents, 
+  setFileContents, 
+  isLoading, 
+  isSaving, 
+  onSave 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  agentId: string | null; 
+  agentName: string; 
+  workspacePath: string; 
+  files: any[]; 
+  activeFileTab: string; 
+  setActiveFileTab: (tab: string) => void; 
+  fileContents: Record<string, string>; 
+  setFileContents: (contents: Record<string, string>) => void; 
+  isLoading: boolean; 
+  isSaving: boolean; 
+  onSave: (filename: string) => void; 
+}) {
+  if (!isOpen || !agentId) return null;
+  
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+      <div className="bg-white rounded-2xl border border-gray-200 w-[80vw] h-[80vh] overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200 flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+              <Settings className="w-5 h-5 text-purple-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-900">编辑智能体信息</h3>
+              <p className="text-xs text-gray-500">{agentName} (ID: {agentId})</p>
+              {workspacePath && (
+                <p className="text-xs text-gray-400 mt-1 font-mono truncate max-w-[400px]" title={workspacePath}>
+                  📁 {workspacePath}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {activeFileTab && (
+              <button
+                onClick={() => onSave(activeFileTab)}
+                disabled={isSaving}
+                className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all shadow-lg shadow-blue-500/20 active:scale-[0.98] flex items-center gap-2"
+              >
+                {isSaving ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                ) : null}
+                保存
+              </button>
+            )}
+            <button 
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        
+        {isLoading ? (
+          <div className="flex-1 flex items-center justify-center p-12">
+            <div className="text-center">
+              <div className="w-10 h-10 border-3 border-gray-200 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
+              <div className="text-gray-500">加载文件...</div>
+            </div>
+          </div>
+        ) : files.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center p-12">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Settings className="w-8 h-8 text-gray-400" />
+              </div>
+              <div className="text-gray-500 mb-2">暂无可编辑的文件</div>
+              <div className="text-xs text-gray-400">该智能体的工作区中没有 .md 文件</div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col min-h-0">
+            {/* File Tabs */}
+            <div className="flex p-1 bg-gray-100/50 gap-1 overflow-x-auto no-scrollbar">
+              {files.map((file) => (
+                <button
+                  key={file.name}
+                  type="button"
+                  onClick={() => setActiveFileTab(file.name)}
+                  className={`flex-none px-3 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap ${activeFileTab === file.name ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}
+                >
+                  {file.name}
+                </button>
+              ))}
+            </div>
+            
+            {/* File Editor */}
+            {activeFileTab && (
+              <div className="flex-1 relative min-h-0">
+                <textarea
+                  value={fileContents[activeFileTab] || ''}
+                  onChange={(e) => setFileContents({
+                    ...fileContents,
+                    [activeFileTab]: e.target.value
+                  })}
+                  placeholder="在此编辑文件内容..."
+                  className="w-full h-full p-4 bg-transparent outline-none transition-all resize-none text-[13px] font-mono text-gray-900 border-0 focus:ring-0 leading-relaxed"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, Children, isValidElement, cloneElement, ReactNode } from 'react';
-import { Menu, Plus, Quote, Copy, Check, Download, X, Search, ChevronUp, ChevronDown, Trash2, ChevronDown as ChevronDownIcon } from 'lucide-react';
+import { Menu, Plus, Quote, Copy, Check, Download, X, Search, ChevronUp, ChevronDown, Trash2, ChevronDown as ChevronDownIcon, History, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getFileIconInfo } from '../utils/fileUtils';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -54,6 +54,12 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+
+  // --- History Modal States ---
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [historyCurrentPage, setHistoryCurrentPage] = useState(1);
+  const [historyItemsPerPage] = useState(20);
 
   // Find active session name - look in both sessions and systemAgents
   const activeSessionName = sessions.find(s => s.id === activeSessionId)?.name || systemAgents.find(s => s.id === activeSessionId)?.name || (aiName || '未命名角色');
@@ -332,15 +338,29 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
         const loadTimeAgentName = loadTimeSession?.name || aiName || '';
         const loadTimeModel = loadTimeSession?.model || currentModel || '';
 
-        const rows = d.messages.map((m: any) => ({
-          id: String(m.id || Math.random()),
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: String(m.content || ''),
-          timestamp: new Date(m.created_at || Date.now()),
-          model: m.model_used || loadTimeModel || undefined,
-          agentId: m.agent_id || undefined,
-          agentName: m.agent_name || loadTimeAgentName || undefined,
-        }));
+        const rows = d.messages.map((m: any) => {
+          console.log('[ChatView] Loading message:', { id: m.id, created_at: m.created_at, parsed: new Date(m.created_at) });
+          let date: Date;
+          if (m.created_at) {
+            date = new Date(m.created_at);
+            // Check if date is valid
+            if (isNaN(date.getTime())) {
+              console.warn('[ChatView] Invalid date, using fallback:', m.created_at);
+              date = new Date(Date.now() - 86400000); // Yesterday as fallback
+            }
+          } else {
+            date = new Date(Date.now() - 86400000); // Yesterday as fallback
+          }
+          return {
+            id: String(m.id || Math.random()),
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: String(m.content || ''),
+            timestamp: date,
+            model: m.model_used || loadTimeModel || undefined,
+            agentId: m.agent_id || undefined,
+            agentName: m.agent_name || loadTimeAgentName || undefined,
+          };
+        });
         setMessages(rows);
       }
     } catch (err) {
@@ -1181,6 +1201,50 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
                                       </blockquote>
                                     );
                                   },
+                                  table({ children, ...props }: any) {
+                                    return (
+                                      <div className="my-4 overflow-x-auto">
+                                        <table className="w-full border-collapse border border-slate-300 rounded-lg overflow-hidden" {...props}>
+                                          {children}
+                                        </table>
+                                      </div>
+                                    );
+                                  },
+                                  thead({ children, ...props }: any) {
+                                    return (
+                                      <thead className="bg-slate-100" {...props}>
+                                        {children}
+                                      </thead>
+                                    );
+                                  },
+                                  tbody({ children, ...props }: any) {
+                                    return (
+                                      <tbody className="bg-white" {...props}>
+                                        {children}
+                                      </tbody>
+                                    );
+                                  },
+                                  tr({ children, ...props }: any) {
+                                    return (
+                                      <tr className="border-b border-slate-200 hover:bg-slate-50 transition-colors" {...props}>
+                                        {children}
+                                      </tr>
+                                    );
+                                  },
+                                  th({ children, ...props }: any) {
+                                    return (
+                                      <th className="px-4 py-3 text-left text-[13px] font-bold text-slate-700 border-r border-slate-200 last:border-r-0 bg-slate-100" {...props}>
+                                        {children}
+                                      </th>
+                                    );
+                                  },
+                                  td({ children, ...props }: any) {
+                                    return (
+                                      <td className="px-4 py-3 text-[14px] text-slate-700 border-r border-slate-200 last:border-r-0" {...props}>
+                                        {children}
+                                      </td>
+                                    );
+                                  },
                                   img({ src, alt }) {
                                     return (
                                       <div
@@ -1345,6 +1409,50 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
                                 <code className="bg-slate-100 text-rose-600 px-1.5 py-0.5 rounded font-mono text-[14px]" {...props}>
                                   {children}
                                 </code>
+                              );
+                            },
+                            table({ children, ...props }: any) {
+                              return (
+                                <div className="my-4 overflow-x-auto">
+                                  <table className="w-full border-collapse border border-slate-300 rounded-lg overflow-hidden" {...props}>
+                                    {children}
+                                  </table>
+                                </div>
+                              );
+                            },
+                            thead({ children, ...props }: any) {
+                              return (
+                                <thead className="bg-slate-100" {...props}>
+                                  {children}
+                                </thead>
+                              );
+                            },
+                            tbody({ children, ...props }: any) {
+                              return (
+                                <tbody className="bg-white" {...props}>
+                                  {children}
+                                </tbody>
+                              );
+                            },
+                            tr({ children, ...props }: any) {
+                              return (
+                                <tr className="border-b border-slate-200 hover:bg-slate-50 transition-colors" {...props}>
+                                  {children}
+                                </tr>
+                              );
+                            },
+                            th({ children, ...props }: any) {
+                              return (
+                                <th className="px-4 py-3 text-left text-[13px] font-bold text-slate-700 border-r border-slate-200 last:border-r-0 bg-slate-100" {...props}>
+                                  {children}
+                                </th>
+                              );
+                            },
+                            td({ children, ...props }: any) {
+                              return (
+                                <td className="px-4 py-3 text-[14px] text-slate-700 border-r border-slate-200 last:border-r-0" {...props}>
+                                  {children}
+                                </td>
                               );
                             },
                             img({ src, alt }) {
@@ -1558,6 +1666,7 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+                  title="添加文件"
                 >
                   <Plus className="w-5 h-5" />
                 </button>
@@ -1575,8 +1684,24 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
                       }
                     }}
                     className="h-9 px-2 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all font-bold text-base"
+                    title="快捷指令"
                   >
                     /
+                  </button>
+                </div>
+
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowHistoryModal(true);
+                      setHistorySearchQuery('');
+                      setHistoryCurrentPage(1);
+                    }}
+                    className="h-9 px-2 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+                    title="历史记录"
+                  >
+                    <History className="w-5 h-5" />
                   </button>
                 </div>
               </div>
@@ -1647,6 +1772,186 @@ export default function ChatView({ isConnected, activeSessionId, onMenuClick, se
               >
                 确认删除
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* History Modal */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity animate-in fade-in duration-200"
+            onClick={() => setShowHistoryModal(false)}
+          ></div>
+          <div className="bg-white rounded-[32px] border border-slate-200 w-full max-w-4xl max-h-[80vh] overflow-hidden relative z-10 animate-in fade-in zoom-in-95 duration-200 flex flex-col">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-xl font-black text-slate-900 tracking-tight">聊天历史记录</h3>
+              <button
+                type="button"
+                onClick={() => setShowHistoryModal(false)}
+                className="w-10 h-10 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search Bar */}
+            <div className="p-4 border-b border-slate-100">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <input
+                  type="text"
+                  value={historySearchQuery}
+                  onChange={(e) => {
+                    setHistorySearchQuery(e.target.value);
+                    setHistoryCurrentPage(1);
+                  }}
+                  placeholder="搜索聊天记录..."
+                  className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200 transition-all"
+                />
+              </div>
+            </div>
+
+            {/* History List */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {(() => {
+                // Filter messages based on search query
+                const filteredMessages = historySearchQuery.trim()
+                  ? messages.filter(m => 
+                      m.content.toLowerCase().includes(historySearchQuery.toLowerCase().trim())
+                    )
+                  : [...messages].reverse(); // Reverse for latest first
+
+                // Calculate pagination
+                const totalItems = filteredMessages.length;
+                const totalPages = Math.ceil(totalItems / historyItemsPerPage);
+                const startIndex = (historyCurrentPage - 1) * historyItemsPerPage;
+                const paginatedMessages = filteredMessages.slice(startIndex, startIndex + historyItemsPerPage);
+
+                if (totalItems === 0) {
+                  return (
+                    <div className="text-center py-12">
+                      <div className="text-slate-400 text-lg font-medium">
+                        {historySearchQuery.trim() ? '未找到匹配的记录' : '暂无聊天记录'}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <>
+                    {/* History Items */}
+                    <div className="space-y-3">
+                      {paginatedMessages.map((msg, idx) => (
+                        <div
+                          key={`${msg.id}-${idx}`}
+                          onClick={() => {
+                            // Scroll to this message in main chat
+                            const el = document.querySelector(`[data-msg-id="${msg.id}"]`);
+                            if (el) {
+                              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              setShowHistoryModal(false);
+                              // Highlight the message temporarily
+                              setActiveHighlightId(msg.id);
+                              setTimeout(() => setActiveHighlightId(null), 2000);
+                            }
+                          }}
+                          className="p-4 rounded-xl border border-slate-200 hover:border-brand-300 hover:bg-brand-50 transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-start justify-between gap-3 mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                                msg.role === 'user' 
+                                  ? 'bg-blue-100 text-blue-600' 
+                                  : 'bg-brand-100 text-brand-600'
+                              }`}>
+                                {msg.role === 'user' ? '用' : '助'}
+                              </span>
+                              <span className="text-sm font-semibold text-slate-700">
+                                {msg.role === 'user' ? '用户' : (msg.agentName || '助手')}
+                              </span>
+                            </div>
+                            <span className="text-xs text-slate-400 font-medium">
+                              {msg.timestamp.toLocaleString('zh-CN')}
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-600 line-clamp-3 leading-relaxed">
+                            {historySearchQuery.trim() ? (
+                              // Highlight search results
+                              msg.content.split(new RegExp(`(${historySearchQuery})`, 'gi')).map((part, i) => 
+                                part.toLowerCase() === historySearchQuery.toLowerCase() ? (
+                                  <mark key={i} className="bg-yellow-200 px-1 rounded">{part}</mark>
+                                ) : (
+                                  <span key={i}>{part}</span>
+                                )
+                              )
+                            ) : (
+                              msg.content
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="mt-6 flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryCurrentPage(prev => Math.max(1, prev - 1))}
+                          disabled={historyCurrentPage === 1}
+                          className="w-10 h-10 flex items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          <ChevronLeft className="w-5 h-5" />
+                        </button>
+                        <div className="flex items-center gap-1">
+                          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                            let pageNum = i + 1;
+                            if (totalPages > 5) {
+                              if (historyCurrentPage <= 3) {
+                                pageNum = i + 1;
+                              } else if (historyCurrentPage >= totalPages - 2) {
+                                pageNum = totalPages - 4 + i;
+                              } else {
+                                pageNum = historyCurrentPage - 2 + i;
+                              }
+                            }
+                            return (
+                              <button
+                                key={pageNum}
+                                type="button"
+                                onClick={() => setHistoryCurrentPage(pageNum)}
+                                className={`w-10 h-10 flex items-center justify-center rounded-xl text-sm font-bold transition-all ${
+                                  historyCurrentPage === pageNum
+                                    ? 'bg-brand-600 text-white'
+                                    : 'border border-slate-200 text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                {pageNum}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                          disabled={historyCurrentPage === totalPages}
+                          className="w-10 h-10 flex items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          <ChevronRight className="w-5 h-5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Page Info */}
+                    <div className="mt-4 text-center text-sm text-slate-500">
+                      共 {totalItems} 条记录，第 {historyCurrentPage}/{totalPages} 页
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
