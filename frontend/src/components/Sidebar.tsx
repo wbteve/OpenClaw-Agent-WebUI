@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash, ChevronRightIcon, Search, User, Bot } from 'lucide-react';
+import { Plus, Settings, ArrowLeft, X, Network, Terminal, Trash2, Cpu, MoreHorizontal, Edit3, Trash, ChevronRightIcon, Search, User, Bot, Activity } from 'lucide-react';
 import { Reorder } from 'motion/react';
 import { ViewType, SettingsTab } from '../App';
 
@@ -109,14 +109,17 @@ function SessionCardWithTooltip({
           </span>
         )}
         <div className="flex-1 min-w-0">
-          <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${isActive ? 'font-semibold' : 'font-medium'} font-mono`}>
-            {session.key || session.id}
+          <div className={`text-[14px] truncate w-full flex-1 min-w-0 ${isActive ? 'font-semibold' : 'font-medium'}`}>
+            {session.name || ''}
           </div>
-          {session.name && (
-            <div className="text-[11px] mt-0.5 text-slate-400 truncate">
-              {session.name}
-            </div>
-          )}
+          <div className="text-[11px] mt-0.5 text-slate-400 flex items-center gap-2 flex-wrap">
+            <span className="font-mono">{session.key || session.id}</span>
+            {session.model && (
+              <span className="text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                {session.model}
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
@@ -666,6 +669,13 @@ export default function Sidebar({
           >
             <Terminal className="w-5 h-5" />
             快捷指令
+          </button>
+          <button
+            onClick={() => navigateTo('settings', 'usage', false)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 font-medium ${settingsTab === 'usage' ? 'bg-brand-50 border border-brand-200 text-brand-600' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <Activity className="w-5 h-5" />
+            使用统计
           </button>
         </nav>
         <div className="p-3 border-t border-slate-100">

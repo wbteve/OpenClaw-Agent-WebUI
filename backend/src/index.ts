@@ -393,6 +393,104 @@ app.post('/api/config/test', async (req, res) => {
   }
 });
 
+// --- Usage API Endpoints ---
+app.get('/api/usage', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, message: 'startDate and endDate are required' });
+    }
+
+    const config = configManager.getConfig();
+    const client = new OpenClawClient({
+      gatewayUrl: config.gatewayUrl,
+      token: config.token,
+      password: config.password,
+    });
+    client.on('error', () => {});
+
+    const [sessionsRes, costRes] = await Promise.all([
+      client.getSessionsUsage({
+        startDate: startDate as string,
+        endDate: endDate as string,
+      }),
+      client.getUsageCost({
+        startDate: startDate as string,
+        endDate: endDate as string,
+      }),
+    ]);
+
+    client.disconnect();
+
+    res.json({
+      success: true,
+      sessions: sessionsRes,
+      cost: costRes,
+    });
+  } catch (error: any) {
+    console.error('[API] /api/usage failed:', error);
+    res.status(500).json({
+      success: false,
+      message: error?.message || 'Failed to fetch usage data',
+    });
+  }
+});
+
+app.get('/api/usage/session/:sessionKey/timeseries', async (req, res) => {
+  try {
+    const { sessionKey } = req.params;
+    const config = configManager.getConfig();
+    const client = new OpenClawClient({
+      gatewayUrl: config.gatewayUrl,
+      token: config.token,
+      password: config.password,
+    });
+    client.on('error', () => {});
+
+    const timeSeries = await client.getSessionTimeSeries(sessionKey);
+    client.disconnect();
+
+    res.json({
+      success: true,
+      timeSeries,
+    });
+  } catch (error: any) {
+    console.error('[API] /api/usage/session/timeseries failed:', error);
+    res.status(500).json({
+      success: false,
+      message: error?.message || 'Failed to fetch session time series',
+    });
+  }
+});
+
+app.get('/api/usage/session/:sessionKey/logs', async (req, res) => {
+  try {
+    const { sessionKey } = req.params;
+    const { limit } = req.query;
+    const config = configManager.getConfig();
+    const client = new OpenClawClient({
+      gatewayUrl: config.gatewayUrl,
+      token: config.token,
+      password: config.password,
+    });
+    client.on('error', () => {});
+
+    const logs = await client.getSessionLogs(sessionKey, limit ? parseInt(limit as string) : 1000);
+    client.disconnect();
+
+    res.json({
+      success: true,
+      logs: logs?.logs || logs,
+    });
+  } catch (error: any) {
+    console.error('[API] /api/usage/session/logs failed:', error);
+    res.status(500).json({
+      success: false,
+      message: error?.message || 'Failed to fetch session logs',
+    });
+  }
+});
+
 app.get('/api/config/detect-all', (req, res) => {
   try {
     const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');

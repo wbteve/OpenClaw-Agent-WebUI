@@ -6,7 +6,7 @@ import SettingsView from './components/SettingsView';
 import LoginScreen from './components/LoginScreen';
 
 export type ViewType = 'chat' | 'groupchat' | 'settings';
-export type SettingsTab = 'gateway' | 'general' | 'models' | 'commands';
+export type SettingsTab = 'gateway' | 'general' | 'models' | 'commands' | 'usage';
 
 export default function App() {
   const getHashState = () => {
@@ -351,6 +351,10 @@ export default function App() {
             isConnected={isConnected} 
             settingsTab={settingsTab} 
             onMenuClick={() => navigateTo(currentView, settingsTab, true)}
+            navigateTo={navigateTo}
+            setActiveSessionId={setActiveSessionId}
+            sessions={sessions}
+            systemAgents={systemAgents}
           />
         )}
       </main>

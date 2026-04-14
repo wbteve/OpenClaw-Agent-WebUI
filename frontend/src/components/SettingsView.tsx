@@ -6,9 +6,49 @@ interface SettingsViewProps {
   isConnected: boolean;
   settingsTab: SettingsTab;
   onMenuClick: () => void;
+  navigateTo?: (view: any, tab?: any, openMenu?: boolean) => void;
+  setActiveSessionId?: (id: string) => void;
+  sessions?: any[];
+  systemAgents?: any[];
 }
 
-export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewProps) {
+export default function SettingsView({ settingsTab, onMenuClick, navigateTo, setActiveSessionId, sessions, systemAgents }: SettingsViewProps) {
+  // Helper function to find matching session from sessionKey
+  const findSessionByKey = (sessionKey: string, allSessions: any[]): any => {
+    return allSessions.find((s: any) => {
+      // Match by id directly
+      if (s.id === sessionKey) return true;
+      // Match by full key
+      if (s.key === sessionKey) return true;
+      // Match by last segment of sessionKey (the actual sessionId)
+      const parts = sessionKey.split(':');
+      const lastPart = parts[parts.length - 1];
+      if (lastPart && (s.id === lastPart || s.key?.endsWith(`:${lastPart}`))) return true;
+      return false;
+    });
+  };
+
+  const handleSessionKeyClick = (sessionKey: string) => {
+    if (!navigateTo || !setActiveSessionId) return;
+    
+    const allSessions = [...(systemAgents || []), ...(sessions || [])];
+    const found = findSessionByKey(sessionKey, allSessions);
+    
+    if (found) {
+      setActiveSessionId(found.id);
+      navigateTo('chat');
+    } else {
+      // If we can't find the session, try to use the key directly
+      // First, check if it looks like a full session key (agent:xxx:chat:yyy)
+      const parts = sessionKey.split(':');
+      if (parts.length >= 3) {
+        // It's a full key, just navigate and hope for the best
+        navigateTo('chat');
+        // We can't set activeSessionId directly since we don't have a matching id,
+        // but maybe ChatView can handle it
+      }
+    }
+  };
   // --- Gateway settings state ---
   const [url, setUrl] = useState('');
   const [token, setToken] = useState('');
@@ -27,6 +67,18 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
   const [editingHost, setEditingHost] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartSuccess, setRestartSuccess] = useState(false);
+
+  // --- Usage Stats State ---
+  const [usageStartDate, setUsageStartDate] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+  const [usageEndDate, setUsageEndDate] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageData, setUsageData] = useState<any>(null);
+  const [usageChartMode, setUsageChartMode] = useState<'tokens' | 'cost'>('tokens');
 
   // --- General settings state ---
   const [aiName, setAiName] = useState('我的小龙虾');
@@ -185,6 +237,32 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
       console.error(err);
     }
   };
+
+  const fetchUsage = async () => {
+    try {
+      setUsageLoading(true);
+      setUsageError(null);
+      const res = await fetch(`/api/usage?startDate=${usageStartDate}&endDate=${usageEndDate}`);
+      const data = await res.json();
+      if (data.success) {
+        setUsageData(data);
+      } else {
+        setUsageError(data.message || 'Failed to load usage data');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch usage:', err);
+      setUsageError(err.message || 'Failed to load usage data');
+    } finally {
+      setUsageLoading(false);
+    }
+  };
+
+  // Fetch usage when settingsTab becomes 'usage'
+  useEffect(() => {
+    if (settingsTab === 'usage' && !usageData) {
+      fetchUsage();
+    }
+  }, [settingsTab]);
 
   const handleDiscoverModels = async (endpointId: string) => {
     if (!endpointId) return;
@@ -801,7 +879,7 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
     ...models.map(m => m.id.split('/')[0]).filter(Boolean)
   ])).sort((a, b) => a.localeCompare(b));
 
-  const headerTitle = settingsTab === 'gateway' ? '设置 - 网关' : settingsTab === 'general' ? '设置 - 通用' : settingsTab === 'commands' ? '设置 - 快捷指令' : '设置 - 模型管理';
+  const headerTitle = settingsTab === 'gateway' ? '设置 - 网关' : settingsTab === 'general' ? '设置 - 通用' : settingsTab === 'commands' ? '设置 - 快捷指令' : settingsTab === 'usage' ? '设置 - 使用统计' : '设置 - 模型管理';
 
   return (
     <div className="flex flex-col h-full bg-gray-50/50">
@@ -816,7 +894,7 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-6 sm:p-8">
-        <div className="max-w-2xl mx-auto space-y-6 sm:space-y-8">
+        <div className={`space-y-6 sm:space-y-8 ${settingsTab === 'usage' ? 'max-w-6xl mx-auto' : 'max-w-2xl mx-auto'}`}>
 
           {/* Gateway Settings Tab */}
           {settingsTab === 'gateway' && (
@@ -1282,6 +1360,156 @@ export default function SettingsView({ settingsTab, onMenuClick }: SettingsViewP
                   </table>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Usage Stats Tab */}
+          {settingsTab === 'usage' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-1">使用统计</h3>
+                <p className="text-sm text-gray-500 mb-6">查看会话使用统计和成本分析。</p>
+
+                {/* Date Range Controls */}
+                <div className="bg-white p-4 sm:p-6 rounded-2xl border border-gray-200 mb-6">
+                  <div className="flex flex-col sm:flex-row gap-4 items-end">
+                    <div className="flex-1 w-full">
+                      <label className="block text-sm font-medium text-gray-900 mb-2">开始日期</label>
+                      <input
+                        type="date"
+                        value={usageStartDate}
+                        onChange={(e) => setUsageStartDate(e.target.value)}
+                        className="block w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all text-sm"
+                      />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="block text-sm font-medium text-gray-900 mb-2">结束日期</label>
+                      <input
+                        type="date"
+                        value={usageEndDate}
+                        onChange={(e) => setUsageEndDate(e.target.value)}
+                        className="block w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all text-sm"
+                      />
+                    </div>
+                    <div className="flex w-full sm:w-auto gap-2">
+                      <button
+                        onClick={fetchUsage}
+                        disabled={usageLoading}
+                        className="h-[42px] px-6 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {usageLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : '刷新数据'}
+                      </button>
+                      <button
+                        onClick={() => setUsageChartMode(usageChartMode === 'tokens' ? 'cost' : 'tokens')}
+                        className="h-[42px] px-4 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition-all font-bold text-sm flex items-center justify-center gap-2"
+                      >
+                        {usageChartMode === 'tokens' ? '切换到成本' : '切换到Token'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {usageError && (
+                  <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-xl border border-red-200">
+                    <div className="flex items-center gap-2">
+                      <X className="w-5 h-5 shrink-0" />
+                      <span className="font-medium">{usageError}</span>
+                    </div>
+                  </div>
+                )}
+
+                {usageLoading && !usageData && (
+                  <div className="bg-white p-12 rounded-2xl border border-gray-200 text-center">
+                    <Loader2 className="w-8 h-8 animate-spin text-blue-500 mx-auto mb-4" />
+                    <p className="text-gray-500">加载使用统计中...</p>
+                  </div>
+                )}
+
+                {usageData && (
+                  <>
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                      <div className="bg-white p-5 rounded-2xl border border-gray-200">
+                        <div className="text-sm text-gray-500 mb-1">会话总数</div>
+                        <div className="text-2xl font-bold text-gray-900">
+                          {usageData.sessions?.sessions?.length || 0}
+                        </div>
+                      </div>
+                      <div className="bg-white p-5 rounded-2xl border border-gray-200">
+                        <div className="text-sm text-gray-500 mb-1">总 Token</div>
+                        <div className="text-2xl font-bold text-gray-900">
+                          {usageData.sessions?.totals?.totalTokens?.toLocaleString() || 0}
+                        </div>
+                      </div>
+                      <div className="bg-white p-5 rounded-2xl border border-gray-200">
+                        <div className="text-sm text-gray-500 mb-1">总成本</div>
+                        <div className="text-2xl font-bold text-gray-900">
+                          ${usageData.sessions?.totals?.totalCost?.toFixed(4) || '0.0000'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Sessions List */}
+                    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+                      <div className="px-6 py-4 border-b border-gray-100">
+                        <h4 className="font-semibold text-gray-900">会话列表</h4>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[600px]">
+                          <thead>
+                            <tr className="bg-gray-50 border-b border-gray-200">
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">会话 Key</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Agent</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Token</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">成本</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {(usageData.sessions?.sessions || []).slice(0, 50).map((session: any, index: number) => (
+                              <tr key={session.key || index} className="hover:bg-gray-50/50 transition-colors">
+                                <td className="px-6 py-4 text-sm font-mono text-gray-700 break-all max-w-[500px]" title={session.key}>
+                                  {session.key ? (
+                                    <button
+                                      onClick={() => handleSessionKeyClick(session.key)}
+                                      className="text-blue-600 hover:text-blue-800 hover:underline text-left break-all"
+                                      title="点击查看会话对话"
+                                    >
+                                      {session.key}
+                                    </button>
+                                  ) : '-'}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600">
+                                  {session.agentId || '-'}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600 text-right font-mono">
+                                  {session.usage?.totalTokens?.toLocaleString() || 0}
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600 text-right font-mono">
+                                  ${session.usage?.totalCost?.toFixed(4) || '0.0000'}
+                                </td>
+                              </tr>
+                            ))}
+                            {(!usageData.sessions?.sessions || usageData.sessions.sessions.length === 0) && (
+                              <tr>
+                                <td colSpan={4} className="px-6 py-12 text-center text-gray-400 text-sm italic">
+                                  暂无会话数据
+                                </td>
+                              </tr>
+                            )}
+                            {(usageData.sessions?.sessions?.length || 0) > 50 && (
+                              <tr>
+                                <td colSpan={4} className="px-6 py-4 text-center text-sm text-gray-500">
+                                  显示前 50 条，共 {usageData.sessions?.sessions?.length} 条会话
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}

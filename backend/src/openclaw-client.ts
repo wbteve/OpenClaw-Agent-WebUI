@@ -270,6 +270,74 @@ export class OpenClawClient extends EventEmitter {
     }
   }
 
+  async getSessionsUsage(params: {
+    startDate: string;
+    endDate: string;
+    limit?: number;
+  }): Promise<any> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      return await this.request('sessions.usage', {
+        startDate: params.startDate,
+        endDate: params.endDate,
+        limit: params.limit || 1000,
+        includeContextWeight: true,
+      }, 60000);
+    } catch (err) {
+      console.error('[OpenClawClient] getSessionsUsage failed:', err);
+      throw err;
+    }
+  }
+
+  async getUsageCost(params: {
+    startDate: string;
+    endDate: string;
+  }): Promise<any> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      return await this.request('usage.cost', {
+        startDate: params.startDate,
+        endDate: params.endDate,
+      }, 60000);
+    } catch (err) {
+      console.error('[OpenClawClient] getUsageCost failed:', err);
+      throw err;
+    }
+  }
+
+  async getSessionTimeSeries(sessionKey: string): Promise<any> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      return await this.request('sessions.usage.timeseries', {
+        key: sessionKey,
+      }, 60000);
+    } catch (err) {
+      console.error('[OpenClawClient] getSessionTimeSeries failed:', err);
+      throw err;
+    }
+  }
+
+  async getSessionLogs(sessionKey: string, limit = 1000): Promise<any> {
+    if (!this.connected) {
+      await this.connect();
+    }
+    try {
+      return await this.request('sessions.usage.logs', {
+        key: sessionKey,
+        limit,
+      }, 60000);
+    } catch (err) {
+      console.error('[OpenClawClient] getSessionLogs failed:', err);
+      throw err;
+    }
+  }
+
   disconnect(): void {
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
